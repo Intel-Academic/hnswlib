@@ -162,14 +162,16 @@ get_gt(unsigned int *massQA, unsigned char *massQ, unsigned char *mass, size_t v
 
 static float
 test_approx(unsigned char *massQ, size_t vecsize, size_t qsize, HierarchicalNSW<int> &appr_alg, size_t vecdim,
-            vector<std::priority_queue<std::pair<int, labeltype >>> &answers, size_t k) {
+            vector<std::priority_queue<std::pair<int, labeltype >>> &answers, size_t k, vector<float> &times_micro) {
     size_t correct = 0;
     size_t total = 0;
     //uncomment to test in parallel mode:
     //#pragma omp parallel for
     for (int i = 0; i < qsize; i++) {
 
+        StopW query_time;
         std::priority_queue<std::pair<int, labeltype >> result = appr_alg.searchKnn(massQ + vecdim * i, k);
+        times_micro.push_back(query_time.getElapsedTimeMicro());
         std::priority_queue<std::pair<int, labeltype >> gt(answers[i]);
         unordered_set<labeltype> g;
         total += gt.size();
@@ -209,14 +211,29 @@ test_vs_recall(unsigned char *massQ, size_t vecsize, size_t qsize, HierarchicalN
     }
     for (size_t ef : efs) {
         appr_alg.setEf(ef);
-        StopW stopw = StopW();
+        // StopW stopw = StopW();
+        vector<float> times_micro;
+        float recall = test_approx(massQ, vecsize, qsize, appr_alg, vecdim, answers, k, times_micro);
+        double total_time = 0;
+        for (auto query_time: times_micro) {
+            total_time += query_time;
+        }
+        long double mean_time = total_time / times_micro.size();
+        long double squares = 0;
+        for (auto query_time: times_micro) {
+            squares += std::pow(query_time - mean_time, 2);
+        }
+        auto stddev = std::sqrt(squares / (long double)times_micro.size());
+        std::sort(times_micro.begin(), times_micro.end());
+        auto three_nines = std::ceil((99.9/100.0) * times_micro.size());
+        auto three_nines_time = times_micro[three_nines];
 
-        float recall = test_approx(massQ, vecsize, qsize, appr_alg, vecdim, answers, k);
-        float time_us_per_query = stopw.getElapsedTimeMicro() / qsize;
+        //float time_us_per_query = stopw.getElapsedTimeMicro() / qsize;
+        float time_us_per_query = mean_time;
 
-        cout << ef << "\t" << recall << "\t" << time_us_per_query << " us\n";
+        cout << ef << "\t" << recall << "\t" << time_us_per_query << " +/- " << stddev << " us (99.9%: " << three_nines_time << " us)\n";
         if (recall > 1.0) {
-            cout << recall << "\t" << time_us_per_query << " us\n";
+            cout << recall << "\t" << time_us_per_query << " +/-" << stddev << " us\n";
             break;
         }
     }
@@ -231,7 +248,7 @@ inline bool exists_test(const std::string &name) {
 void sift_test1B() {
 	
 	
-	int subset_size_milllions = 200;
+	int subset_size_milllions = 500;
 	int efConstruction = 40;
 	int M = 16;
 	

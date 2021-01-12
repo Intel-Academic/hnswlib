@@ -70,13 +70,16 @@ get_gt(unsigned int *massQA, float *massQ, float *mass, size_t vecsize, size_t q
 }
 
 float test_approx(float *massQ, size_t vecsize, size_t qsize, HierarchicalNSW<float> &appr_alg, size_t vecdim,
-                  vector<std::priority_queue<std::pair<float, labeltype >>> &answers, size_t k) {
+                  vector<std::priority_queue<std::pair<float, labeltype >>> &answers, size_t k,
+                  vector<std::chrono::microseconds> &times) {
     size_t correct = 0;
     size_t total = 0;
 //#pragma omp parallel for
     for (int i = 0; i < qsize; i++) {
 
+        StopW q_timer;
         std::priority_queue<std::pair<float, labeltype >> result = appr_alg.searchKnn(massQ + vecdim * i, 10);
+        times.push_back(q_timer.getElapsedTimeMicro());
         std::priority_queue<std::pair<float, labeltype >> gt(answers[i]);
         unordered_set<labeltype> g;
         total += gt.size();
