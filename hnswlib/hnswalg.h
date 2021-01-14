@@ -8,11 +8,71 @@
 #include <assert.h>
 #include <unordered_set>
 #include <list>
+#include <sys/mman.h>
+#include <string>
+#include <cstdio>
+#include <cstdlib>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+struct Mapping {
+	int file;
+	char *mapping;
+	size_t size;
+};
 
 
 namespace hnswlib {
     typedef unsigned int tableint;
     typedef unsigned int linklistsizeint;
+
+    void unmap_file(Mapping map) {
+	munmap(map.mapping, map.size);
+	close(map.file);
+    }
+
+    Mapping map_file(const char* path, size_t size, bool create) {
+	    using namespace std;
+	    int desc;
+	    if (create) {
+		    cout << "Creating " << path << endl;
+		desc = open(path, O_RDWR | O_CREAT | O_TRUNC, (mode_t)0600);
+		if (desc == -1) {
+                	throw std::runtime_error("Couldn't open mmap file");
+		}
+		int result = lseek(desc, size - 1, SEEK_SET);
+		if (result == -1) {
+            		close(desc);
+			throw std::runtime_error("Couldn't resize mmap file");
+		}
+		result = write(desc, "", 1);
+		    if (result != 1) {
+			close(desc);
+			throw std::runtime_error("Error writing last byte of the file");
+		    }
+	    } else {
+		desc = open(path, O_RDWR, (mode_t)0600);
+	    }
+	    size_t file_size = lseek(desc, 0, SEEK_END); 
+	    if (file_size != size) {
+	    	cout << "File size is " << file_size << ", expected " << size << endl;
+            	close(desc);
+		    throw std::runtime_error("mmap file size is wrong");
+	    }
+	    lseek(desc, 0, SEEK_SET);
+	    const auto map =  (char *) mmap(nullptr, size,
+			    PROT_READ | PROT_WRITE, MAP_PRIVATE, desc, 0); 
+            if (map == nullptr || map == MAP_FAILED) {
+            	close(desc);
+                throw std::runtime_error("Couldn't map file");
+	    }
+	    Mapping m;
+	    m.file = desc;
+	    m.mapping = map;
+	    m.size = size;
+	  return m;  
+    }
 
     template<typename dist_t>
     class HierarchicalNSW : public AlgorithmInterface<dist_t> {
@@ -26,7 +86,9 @@ namespace hnswlib {
             loadIndex(location, s, max_elements);
         }
 
-        HierarchicalNSW(SpaceInterface<dist_t> *s, size_t max_elements, size_t M = 16, size_t ef_construction = 200, size_t random_seed = 100) :
+        HierarchicalNSW(SpaceInterface<dist_t> *s, size_t max_elements, size_t M = 16, size_t ef_construction = 200, 
+			size_t random_seed = 100,
+			std::string level0_path = "hnswlib.level0") :
                 link_list_locks_(max_elements), link_list_update_locks_(max_update_element_locks), element_levels_(max_elements) {
             max_elements_ = max_elements;
 
@@ -48,10 +110,13 @@ namespace hnswlib {
             offsetData_ = size_links_level0_;
             label_offset_ = size_links_level0_ + data_size_;
             offsetLevel0_ = 0;
-
-            data_level0_memory_ = (char *) malloc(max_elements_ * size_data_per_element_);
-            if (data_level0_memory_ == nullptr)
-                throw std::runtime_error("Not enough memory");
+	 
+	    auto l0_size = max_elements_ * size_data_per_element_;
+	    auto l0_path = level0_path.c_str();
+		    
+            //data_level0_memory_ = (char *) malloc();
+	    level0_mapping_ = map_file(l0_path, l0_size, true);
+	    data_level0_memory_ = level0_mapping_.mapping;
 
             cur_element_count = 0;
 
@@ -79,8 +144,8 @@ namespace hnswlib {
         };
 
         ~HierarchicalNSW() {
-
-            free(data_level0_memory_);
+		unmap_file(level0_mapping_);
+            //free(data_level0_memory_);
             for (tableint i = 0; i < cur_element_count; i++) {
                 if (element_levels_[i] > 0)
                     free(linkLists_[i]);
@@ -117,7 +182,7 @@ namespace hnswlib {
         size_t size_links_level0_;
         size_t offsetData_, offsetLevel0_;
 
-
+	Mapping level0_mapping_;
         char *data_level0_memory_;
         char **linkLists_;
         std::vector<int> element_levels_;
@@ -579,6 +644,7 @@ namespace hnswlib {
 
             std::vector<std::mutex>(new_max_elements).swap(link_list_locks_);
 
+	    throw std::runtime_error("Not implemented for mmaps yet");
             // Reallocate base layer
             char * data_level0_memory_new = (char *) malloc(new_max_elements * size_data_per_element_);
             if (data_level0_memory_new == nullptr)
@@ -696,7 +762,7 @@ namespace hnswlib {
 
             input.seekg(pos,input.beg);
 
-
+	    throw std::runtime_error("index loading with mmap not implemented yet");
             data_level0_memory_ = (char *) malloc(max_elements * size_data_per_element_);
             if (data_level0_memory_ == nullptr)
                 throw std::runtime_error("Not enough memory: loadIndex failed to allocate level0");
