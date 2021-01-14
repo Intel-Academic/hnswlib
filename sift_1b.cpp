@@ -251,6 +251,7 @@ void sift_test1B() {
 	int efConstruction = 40;
 	int M = 16;
 	
+	char* l0_path = "/mnt/pmem1/hnswlib.level0";
 
     size_t vecsize = subset_size_milllions * 1000000;
 
@@ -307,13 +308,14 @@ void sift_test1B() {
     L2SpaceI l2space(vecdim);
 
     HierarchicalNSW<int> *appr_alg;
-    if (exists_test(path_index)) {
+    //TODO fix this if we want to load existing
+    if (false && exists_test(path_index)) {
         cout << "Loading index from " << path_index << ":\n";
         appr_alg = new HierarchicalNSW<int>(&l2space, path_index, false);
         cout << "Actual memory usage: " << getCurrentRSS() / 1000000 << " Mb \n";
     } else {
         cout << "Building index:\n";
-        appr_alg = new HierarchicalNSW<int>(&l2space, vecsize, M, efConstruction);
+        appr_alg = new HierarchicalNSW<int>(&l2space, vecsize, M, efConstruction, l0_path);
 
 
         input.read((char *) &in, 4);

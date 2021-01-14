@@ -87,8 +87,8 @@ namespace hnswlib {
         }
 
         HierarchicalNSW(SpaceInterface<dist_t> *s, size_t max_elements, size_t M = 16, size_t ef_construction = 200, 
-			size_t random_seed = 100,
-			std::string level0_path = "hnswlib.level0") :
+			std::string level0_path = "hnswlib.level0",
+			size_t random_seed = 100) : 
                 link_list_locks_(max_elements), link_list_update_locks_(max_update_element_locks), element_levels_(max_elements) {
             max_elements_ = max_elements;
 
