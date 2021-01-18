@@ -52,6 +52,7 @@ namespace hnswlib {
 			throw std::runtime_error("Error writing last byte of the file");
 		    }
 	    } else {
+		    cout << "Mapping existing " << path << endl;
 		desc = open(path, O_RDWR, (mode_t)0600);
 	    }
 	    size_t file_size = lseek(desc, 0, SEEK_END); 
@@ -61,8 +62,13 @@ namespace hnswlib {
 		    throw std::runtime_error("mmap file size is wrong");
 	    }
 	    lseek(desc, 0, SEEK_SET);
+	    //char buf[0x100];
+	    //snprintf(buf, sizeof buf, "pmap -x %u", (unsigned)getpid());
+            //system(buf);
+	    //system("ulimit -m -v");
 	    const auto map =  (char *) mmap(nullptr, size,
-			    PROT_READ | PROT_WRITE, MAP_PRIVATE, desc, 0); 
+			     PROT_READ | PROT_WRITE, MAP_NORESERVE | MAP_SHARED, desc, 0); 
+            //system(buf);
             if (map == nullptr || map == MAP_FAILED) {
             	close(desc);
                 throw std::runtime_error("Couldn't map file");
@@ -112,12 +118,14 @@ namespace hnswlib {
             offsetLevel0_ = 0;
 	 
 	    auto l0_size = max_elements_ * size_data_per_element_;
-	    auto l0_path = level0_path.c_str();
+#ifdef HNSW_MMAP
 		    
-            //data_level0_memory_ = (char *) malloc();
+	    auto l0_path = level0_path.c_str();
 	    level0_mapping_ = map_file(l0_path, l0_size, true);
 	    data_level0_memory_ = level0_mapping_.mapping;
-
+#else
+            data_level0_memory_ = (char *) malloc(l0_size);
+#endif
             cur_element_count = 0;
 
             visited_list_pool_ = new VisitedListPool(1, max_elements);
@@ -144,8 +152,11 @@ namespace hnswlib {
         };
 
         ~HierarchicalNSW() {
+#ifdef HNSW_MMAP
 		unmap_file(level0_mapping_);
-            //free(data_level0_memory_);
+#else
+            free(data_level0_memory_);
+#endif
             for (tableint i = 0; i < cur_element_count; i++) {
                 if (element_levels_[i] > 0)
                     free(linkLists_[i]);
@@ -695,7 +706,9 @@ namespace hnswlib {
             output.close();
         }
 
-        void loadIndex(const std::string &location, SpaceInterface<dist_t> *s, size_t max_elements_i=0) {
+        void loadIndex(const std::string &location, SpaceInterface<dist_t> *s, size_t max_elements_i=0,
+			std::string level0_path = "hnswlib.level0"
+			) {
 
 
             std::ifstream input(location, std::ios::binary);
@@ -762,11 +775,24 @@ namespace hnswlib {
 
             input.seekg(pos,input.beg);
 
-	    throw std::runtime_error("index loading with mmap not implemented yet");
+
+	    auto l0_size = max_elements * size_data_per_element_;
+	    auto l0_path = level0_path.c_str();
+	
+#ifdef HNSW_MMAP
+	    level0_mapping_ = map_file(l0_path, l0_size, false);
+	    data_level0_memory_ = level0_mapping_.mapping;
+	    //input.read(data_level0_memory_, cur_element_count * size_data_per_element_);
+	    //std::cout << "Loaded data into mmap" << std::endl;
+	    //TODO why doesn't this work?
+	    //No need to read the index, the map file has the same data
+	    input.seekg(cur_element_count * size_data_per_element_, input.cur);
+#else
             data_level0_memory_ = (char *) malloc(max_elements * size_data_per_element_);
+            input.read(data_level0_memory_, cur_element_count * size_data_per_element_);
+#endif
             if (data_level0_memory_ == nullptr)
                 throw std::runtime_error("Not enough memory: loadIndex failed to allocate level0");
-            input.read(data_level0_memory_, cur_element_count * size_data_per_element_);
 
 
 

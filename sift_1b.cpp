@@ -2,6 +2,9 @@
 #include <fstream>
 #include <queue>
 #include <chrono>
+
+#define HNSW_MMAP
+
 #include "hnswlib/hnswlib.h"
 
 
@@ -199,16 +202,16 @@ test_approx(unsigned char *massQ, size_t vecsize, size_t qsize, HierarchicalNSW<
 static void
 test_vs_recall(unsigned char *massQ, size_t vecsize, size_t qsize, HierarchicalNSW<int> &appr_alg, size_t vecdim,
                vector<std::priority_queue<std::pair<int, labeltype >>> &answers, size_t k) {
-    vector<size_t> efs;// = { 10,10,10,10,10 };
-    for (int i = k; i < 30; i++) {
-        efs.push_back(i);
-    }
-    for (int i = 30; i < 100; i += 10) {
-        efs.push_back(i);
-    }
-    for (int i = 100; i < 500; i += 40) {
-        efs.push_back(i);
-    }
+    vector<size_t> efs = { 180,180 };
+    //for (int i = k; i < 30; i++) {
+        //efs.push_back(i);
+    //}
+    //for (int i = 30; i < 100; i += 10) {
+        //efs.push_back(i);
+    //}
+    //for (int i = 100; i < 500; i += 40) {
+        //efs.push_back(i);
+    //}
     for (size_t ef : efs) {
         appr_alg.setEf(ef);
         // StopW stopw = StopW();
@@ -247,11 +250,10 @@ inline bool exists_test(const std::string &name) {
 
 void sift_test1B() {
 	
-	int subset_size_milllions = 1;
-	int efConstruction = 40;
+	int subset_size_milllions = 100;
+	int efConstruction = 100;
 	int M = 16;
 	
-	char* l0_path = "/mnt/pmem1/hnswlib.level0";
 
     size_t vecsize = subset_size_milllions * 1000000;
 
@@ -308,14 +310,14 @@ void sift_test1B() {
     L2SpaceI l2space(vecdim);
 
     HierarchicalNSW<int> *appr_alg;
-    //TODO fix this if we want to load existing
-    if (false && exists_test(path_index)) {
+    if (exists_test(path_index)) {
         cout << "Loading index from " << path_index << ":\n";
         appr_alg = new HierarchicalNSW<int>(&l2space, path_index, false);
         cout << "Actual memory usage: " << getCurrentRSS() / 1000000 << " Mb \n";
     } else {
+        cout << "No index  " << path_index << "found\n";
         cout << "Building index:\n";
-        appr_alg = new HierarchicalNSW<int>(&l2space, vecsize, M, efConstruction, l0_path);
+        appr_alg = new HierarchicalNSW<int>(&l2space, vecsize, M, efConstruction);
 
 
         input.read((char *) &in, 4);
@@ -370,7 +372,7 @@ void sift_test1B() {
 
 
     vector<std::priority_queue<std::pair<int, labeltype >>> answers;
-    size_t k = 1;
+    size_t k = 5;
     cout << "Parsing gt:\n";
     get_gt(massQA, massQ, mass, vecsize, qsize, l2space, vecdim, answers, k);
     cout << "Loaded gt\n";
