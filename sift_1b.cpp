@@ -201,8 +201,8 @@ test_approx(unsigned char *massQ, size_t vecsize, size_t qsize, HierarchicalNSW<
 
 static void
 test_vs_recall(unsigned char *massQ, size_t vecsize, size_t qsize, HierarchicalNSW<int> &appr_alg, size_t vecdim,
-               vector<std::priority_queue<std::pair<int, labeltype >>> &answers, size_t k) {
-    vector<size_t> efs = { 180,180 };
+               vector<std::priority_queue<std::pair<int, labeltype >>> &answers, size_t k, size_t ef) {
+    vector<size_t> efs = { ef,ef };
     //for (int i = k; i < 30; i++) {
         //efs.push_back(i);
     //}
@@ -248,29 +248,34 @@ inline bool exists_test(const std::string &name) {
 }
 
 
-void sift_test1B() {
+void sift_test1B(
+		    int subset_size_milllions,
+		    int M, 
+		    int efConstruction,
+		    int ef,
+		    int qsize,
+		    int k,
+		    std::string &path_gt,
+		    std::string &path_q
+		) {
 	
-	int subset_size_milllions = 500;
-	int efConstruction = 100;
-	int M = 16;
 	
 
     size_t vecsize = subset_size_milllions * 1000000;
 
-    size_t qsize = 10000;
     size_t vecdim = 128;
     char path_index[1024];
-    char path_gt[1024];
-    char *path_q = "bigann/bigann_query.bvecs";
+    //char path_gt[1024];
+    //char *path_q = "bigann/bigann_query.bvecs";
     char *path_data = "bigann/bigann_base.bvecs";
     sprintf(path_index, "sift1b_%dm_ef_%d_M_%d.bin", subset_size_milllions, efConstruction, M);
 
-    sprintf(path_gt, "bigann/gnd/idx_%dM.ivecs", subset_size_milllions);
+    //sprintf(path_gt, "bigann/gnd/idx_%dM.ivecs", subset_size_milllions);
 
 
     unsigned char *massb = new unsigned char[vecdim];
 
-    cout << "Loading GT:\n";
+    cout << "Loading GT: " << path_gt << "\n";
     ifstream inputGT(path_gt, ios::binary);
     unsigned int *massQA = new unsigned int[qsize * 1000];
     for (int i = 0; i < qsize; i++) {
@@ -284,7 +289,7 @@ void sift_test1B() {
     }
     inputGT.close();
 	
-    cout << "Loading queries:\n";
+    cout << "Loading queries:" << path_q << "\n";
     unsigned char *massQ = new unsigned char[qsize * vecdim];
     ifstream inputQ(path_q, ios::binary);
 
@@ -372,12 +377,11 @@ void sift_test1B() {
 
 
     vector<std::priority_queue<std::pair<int, labeltype >>> answers;
-    size_t k = 5;
     cout << "Parsing gt:\n";
     get_gt(massQA, massQ, mass, vecsize, qsize, l2space, vecdim, answers, k);
     cout << "Loaded gt\n";
     for (int i = 0; i < 1; i++)
-        test_vs_recall(massQ, vecsize, qsize, *appr_alg, vecdim, answers, k);
+        test_vs_recall(massQ, vecsize, qsize, *appr_alg, vecdim, answers, k, ef);
     cout << "Actual memory usage: " << getCurrentRSS() / 1000000 << " Mb \n";
     return;
 
