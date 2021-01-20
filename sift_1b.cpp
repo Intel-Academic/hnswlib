@@ -1,7 +1,6 @@
 #include <iostream>
 #include <fstream>
 #include <queue>
-#include <chrono>
 
 #define HNSW_MMAP
 
@@ -13,23 +12,6 @@
 using namespace std;
 using namespace hnswlib;
 
-class StopW {
-    std::chrono::steady_clock::time_point time_begin;
-public:
-    StopW() {
-        time_begin = std::chrono::steady_clock::now();
-    }
-
-    float getElapsedTimeMicro() {
-        std::chrono::steady_clock::time_point time_end = std::chrono::steady_clock::now();
-        return (std::chrono::duration_cast<std::chrono::microseconds>(time_end - time_begin).count());
-    }
-
-    void reset() {
-        time_begin = std::chrono::steady_clock::now();
-    }
-
-};
 
 
 
@@ -163,19 +145,36 @@ get_gt(unsigned int *massQA, unsigned char *massQ, unsigned char *mass, size_t v
     }
 }
 
-static float
-test_approx(unsigned char *massQ, size_t vecsize, size_t qsize, HierarchicalNSW<int> &appr_alg, size_t vecdim,
-            vector<std::priority_queue<std::pair<int, labeltype >>> &answers, size_t k, vector<float> &times_micro) {
+
+struct TestResult {
+	size_t k;
+	float recall;
+	vector<Times> times;
+};
+
+static TestResult
+test_approx(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_queries, HierarchicalNSW<int> &appr_alg, size_t vecdim,
+            vector<std::priority_queue<std::pair<int, labeltype >>> &answers, size_t k, bool permute) {
+	TestResult results;
+	results.k = k;
     size_t correct = 0;
     size_t total = 0;
     //uncomment to test in parallel mode:
     //#pragma omp parallel for
-    for (int i = 0; i < qsize; i++) {
-
+    vector<size_t> permutation(qsize);
+    //cout << "permuting" << endl;
+    std::iota(permutation.begin(), permutation.end(), 0);
+    if (permute) {
+	    std::random_shuffle(permutation.begin(), permutation.end());
+    }
+    //cout << "running queries" << endl;
+    for (int i = 0; i < n_queries; i++) {
+	size_t offset = permutation[i];
         StopW query_time;
-        std::priority_queue<std::pair<int, labeltype >> result = appr_alg.searchKnn(massQ + vecdim * i, k);
-        times_micro.push_back(query_time.getElapsedTimeMicro());
-        std::priority_queue<std::pair<int, labeltype >> gt(answers[i]);
+        QueryResult result = appr_alg.searchKnn(massQ + vecdim * offset, k);
+	result.times.total_micros = query_time.getElapsedTimeMicro();
+	results.times.push_back(result.times);
+        std::priority_queue<std::pair<int, labeltype >> gt(answers[permutation[i]]);
         unordered_set<labeltype> g;
         total += gt.size();
 
@@ -186,23 +185,62 @@ test_approx(unsigned char *massQ, size_t vecsize, size_t qsize, HierarchicalNSW<
             gt.pop();
         }
 
-        while (result.size()) {
-            if (g.find(result.top().second) != g.end()) {
+        while (result.result.size()) {
+            if (g.find(result.result.top().second) != g.end()) {
 
                 correct++;
             } else {
             }
-            result.pop();
+            result.result.pop();
         }
 
     }
-    return 1.0f * correct / total;
+    results.recall = 1.0f * correct / total;
+    return results;
+}
+
+struct Stats {
+	long double mean;
+	long double total;
+	long double std;
+	long double three_nines;
+};
+
+Stats calculate_stats(std::vector<float> &floats) {
+	// Note - floats will be sorted in place at the end
+	Stats stats;
+	stats.total = 0;
+	stats.mean = 0;
+	stats.std = 0;
+	stats.three_nines = 0;
+	//cout << "calculating total" << endl;
+	long double squares = 0;
+	for (auto f: floats) {
+		stats.total += f;
+	}
+	//cout << "calculating mean" << endl;
+	stats.mean = stats.total / (long double)floats.size();
+
+	//cout << "calculating squares" << endl;
+        for (auto f: floats) {
+            squares += std::pow(f - stats.mean, 2);
+        }
+
+	//cout << "calculating sqrt" << endl;
+        stats.std = std::sqrt(squares / (long double)floats.size());
+	//cout << "sorting" << endl;
+        std::sort(floats.begin(), floats.end());
+	//cout << "three nines" << endl;
+        auto three_nines = std::ceil((99.9/100.0) * floats.size());
+        stats.three_nines = floats[three_nines];
+
+	return stats;
 }
 
 static void
-test_vs_recall(unsigned char *massQ, size_t vecsize, size_t qsize, HierarchicalNSW<int> &appr_alg, size_t vecdim,
-               vector<std::priority_queue<std::pair<int, labeltype >>> &answers, size_t k, size_t ef) {
-    vector<size_t> efs = { ef,ef };
+test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_queries, HierarchicalNSW<int> &appr_alg, size_t vecdim,
+               vector<std::priority_queue<std::pair<int, labeltype >>> &answers, size_t k, vector<size_t> efs, 
+	       size_t repeats, bool permute) {
     //for (int i = k; i < 30; i++) {
         //efs.push_back(i);
     //}
@@ -212,34 +250,37 @@ test_vs_recall(unsigned char *massQ, size_t vecsize, size_t qsize, HierarchicalN
     //for (int i = 100; i < 500; i += 40) {
         //efs.push_back(i);
     //}
-    for (size_t ef : efs) {
-        appr_alg.setEf(ef);
-        // StopW stopw = StopW();
-        vector<float> times_micro;
-        float recall = test_approx(massQ, vecsize, qsize, appr_alg, vecdim, answers, k, times_micro);
-        double total_time = 0;
-        for (auto query_time: times_micro) {
-            total_time += query_time;
-        }
-        long double mean_time = total_time / times_micro.size();
-        long double squares = 0;
-        for (auto query_time: times_micro) {
-            squares += std::pow(query_time - mean_time, 2);
-        }
-        auto stddev = std::sqrt(squares / (long double)times_micro.size());
-        std::sort(times_micro.begin(), times_micro.end());
-        auto three_nines = std::ceil((99.9/100.0) * times_micro.size());
-        auto three_nines_time = times_micro[three_nines];
+	cout << "| run | #q| ef | " << k << "-recall | query_us | hier_us | l0_us | q_std | h_std | l0_std | q_999 | h_999 | l0_999 |" << endl;
+	cout << "|-----|-------|-----|----------|----------|---------|---------|---------|---------|---------|-------|-------|--------|"<< endl;
+	for (size_t run = 1; run <= repeats; run++) {
+		//cout << "starting run " << run << endl;
+	    for (size_t ef : efs) {
+		//cout << "starting ef " << ef << endl;
+		appr_alg.setEf(ef);
+		// StopW stopw = StopW();
+		//cout << "Running queries" << endl;
+		auto test_result = test_approx(massQ, qsize, vecsize, n_queries, appr_alg, vecdim, answers, k, permute);
+		//cout << "Collecting stats" << endl;
+		vector<float> l0_times;
+		std::transform(test_result.times.begin(), test_result.times.end(), std::back_inserter(l0_times),
+				[](Times times) { return times.l0_micros; });
+		auto l0_stats = calculate_stats(l0_times);
+		vector<float> ln_times;
+		std::transform(test_result.times.begin(), test_result.times.end(), std::back_inserter(ln_times),
+				[](Times times) { return times.ln_micros; });
+		auto ln_stats = calculate_stats(ln_times);
+		vector<float> total_times;
+		std::transform(test_result.times.begin(), test_result.times.end(), std::back_inserter(total_times),
+				[](Times times) { return times.total_micros; });
+		auto total_stats = calculate_stats(total_times);
 
-        //float time_us_per_query = stopw.getElapsedTimeMicro() / qsize;
-        float time_us_per_query = mean_time;
-
-        cout << ef << "\t" << recall << "\t" << time_us_per_query << " +/- " << stddev << " us (99.9%: " << three_nines_time << " us)\n";
-        if (recall > 1.0) {
-            cout << recall << "\t" << time_us_per_query << " +/-" << stddev << " us\n";
-            break;
-        }
-    }
+		cout << " | " << run << "|" << n_queries << "|" << ef << " | " << test_result.recall << "|" 
+			<< total_stats.mean << "|" << ln_stats.mean << "|" << l0_stats.mean << "|"
+			<< total_stats.std << "|" << ln_stats.std << "|" << l0_stats.std << "|"
+			<< total_stats.three_nines << "|" << ln_stats.three_nines << "|" << l0_stats.three_nines << "|"
+			<< endl;
+	    }
+	}
 }
 
 inline bool exists_test(const std::string &name) {
@@ -252,11 +293,14 @@ void sift_test1B(
 		    int subset_size_milllions,
 		    int M, 
 		    int efConstruction,
-		    int ef,
-		    int qsize,
+		    std::vector<size_t> efs,
+		    int qsize, // number of queries in the file
+		    int n_queries, //number of queries to run
 		    int k,
 		    std::string &path_gt,
-		    std::string &path_q
+		    std::string &path_q,
+		    size_t repeats,
+		    bool permute
 		) {
 	
 	
@@ -265,10 +309,12 @@ void sift_test1B(
 
     size_t vecdim = 128;
     char path_index[1024];
+    char path_l0[1024];
     //char path_gt[1024];
     //char *path_q = "bigann/bigann_query.bvecs";
     char *path_data = "bigann/bigann_base.bvecs";
     sprintf(path_index, "sift1b_%dm_ef_%d_M_%d.bin", subset_size_milllions, efConstruction, M);
+    sprintf(path_l0, "sift1b_%dm_ef_%d_M_%d.level0", subset_size_milllions, efConstruction, M);
 
     //sprintf(path_gt, "bigann/gnd/idx_%dM.ivecs", subset_size_milllions);
 
@@ -317,12 +363,12 @@ void sift_test1B(
     HierarchicalNSW<int> *appr_alg;
     if (exists_test(path_index)) {
         cout << "Loading index from " << path_index << ":\n";
-        appr_alg = new HierarchicalNSW<int>(&l2space, path_index, false);
+        appr_alg = new HierarchicalNSW<int>(&l2space, path_index, false, 0, path_l0);
         cout << "Actual memory usage: " << getCurrentRSS() / 1000000 << " Mb \n";
     } else {
         cout << "No index  " << path_index << "found\n";
         cout << "Building index:\n";
-        appr_alg = new HierarchicalNSW<int>(&l2space, vecsize, M, efConstruction);
+        appr_alg = new HierarchicalNSW<int>(&l2space, vecsize, M, efConstruction, path_l0);
 
 
         input.read((char *) &in, 4);
@@ -381,7 +427,7 @@ void sift_test1B(
     get_gt(massQA, massQ, mass, vecsize, qsize, l2space, vecdim, answers, k);
     cout << "Loaded gt\n";
     for (int i = 0; i < 1; i++)
-        test_vs_recall(massQ, vecsize, qsize, *appr_alg, vecdim, answers, k, ef);
+        test_vs_recall(massQ, qsize, vecsize, n_queries, *appr_alg, vecdim, answers, k, efs, repeats, permute);
     cout << "Actual memory usage: " << getCurrentRSS() / 1000000 << " Mb \n";
     return;
 

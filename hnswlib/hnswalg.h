@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <chrono>
 
 struct Mapping {
 	int file;
@@ -22,6 +23,24 @@ struct Mapping {
 	size_t size;
 };
 
+
+class StopW {
+    std::chrono::steady_clock::time_point time_begin;
+public:
+    StopW() {
+        time_begin = std::chrono::steady_clock::now();
+    }
+
+    float getElapsedTimeMicro() {
+        std::chrono::steady_clock::time_point time_end = std::chrono::steady_clock::now();
+        return (std::chrono::duration_cast<std::chrono::microseconds>(time_end - time_begin).count());
+    }
+
+    void reset() {
+        time_begin = std::chrono::steady_clock::now();
+    }
+
+};
 
 namespace hnswlib {
     typedef unsigned int tableint;
@@ -88,8 +107,8 @@ namespace hnswlib {
 
         }
 
-        HierarchicalNSW(SpaceInterface<dist_t> *s, const std::string &location, bool nmslib = false, size_t max_elements=0) {
-            loadIndex(location, s, max_elements);
+        HierarchicalNSW(SpaceInterface<dist_t> *s, const std::string &location, bool nmslib = false, size_t max_elements=0, std::string level0_path = "hnswlib.level0") {
+            loadIndex(location, s, max_elements, level0_path);
         }
 
         HierarchicalNSW(SpaceInterface<dist_t> *s, size_t max_elements, size_t M = 16, size_t ef_construction = 200, 
@@ -1199,11 +1218,12 @@ namespace hnswlib {
             return cur_c;
         };
 
-        std::priority_queue<std::pair<dist_t, labeltype >>
+        QueryResult
         searchKnn(const void *query_data, size_t k) const {
-            std::priority_queue<std::pair<dist_t, labeltype >> result;
-            if (cur_element_count == 0) return result;
 
+            QueryResult result;
+            if (cur_element_count == 0) return result;
+	    StopW timer;
             tableint currObj = enterpoint_node_;
             dist_t curdist = fstdistfunc_(query_data, getDataByInternalId(enterpoint_node_), dist_func_param_);
 
@@ -1233,7 +1253,8 @@ namespace hnswlib {
                     }
                 }
             }
-
+	result.times.ln_micros = timer.getElapsedTimeMicro();
+	timer.reset();
             std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
             if (has_deletions_) {                
                 top_candidates=searchBaseLayerST<true,true>(
@@ -1249,9 +1270,10 @@ namespace hnswlib {
             }
             while (top_candidates.size() > 0) {
                 std::pair<dist_t, tableint> rez = top_candidates.top();
-                result.push(std::pair<dist_t, labeltype>(rez.first, getExternalLabel(rez.second)));
+                result.result.push(std::pair<dist_t, labeltype>(rez.first, getExternalLabel(rez.second)));
                 top_candidates.pop();
             }
+	    result.times.l0_micros = timer.getElapsedTimeMicro();
             return result;
         };
 
