@@ -695,7 +695,10 @@ namespace hnswlib {
             writeBinaryPOD(output, mult_);
             writeBinaryPOD(output, ef_construction_);
 
+#ifndef HNSW_MMAP
+	    // We don't need to do this with mmaps, since the level 0 data is in the mmap file
             output.write(data_level0_memory_, cur_element_count * size_data_per_element_);
+#endif
 
             for (size_t i = 0; i < cur_element_count; i++) {
                 unsigned int linkListSize = element_levels_[i] > 0 ? size_links_per_element_ * element_levels_[i] : 0;
@@ -750,8 +753,9 @@ namespace hnswlib {
             auto pos=input.tellg();
 
 
+	    //TODO: adapt this for indices that don't store level0
+#ifndef HNSW_MMAP
             /// Optional - check if index is ok:
-
             input.seekg(cur_element_count * size_data_per_element_,input.cur);
             for (size_t i = 0; i < cur_element_count; i++) {
                 if(input.tellg() < 0 || input.tellg()>=total_filesize){
@@ -772,7 +776,7 @@ namespace hnswlib {
             input.clear();
 
             /// Optional check end
-
+#endif
             input.seekg(pos,input.beg);
 
 
@@ -786,7 +790,9 @@ namespace hnswlib {
 	    //std::cout << "Loaded data into mmap" << std::endl;
 	    //TODO why doesn't this work?
 	    //No need to read the index, the map file has the same data
-	    input.seekg(cur_element_count * size_data_per_element_, input.cur);
+	    std::cout << "Using points from existing " << l0_path << std::endl;
+	    // Don't even need to seekg anymore, since level0 no longer included in index
+	    //input.seekg(cur_element_count * size_data_per_element_, input.cur);
 #else
             data_level0_memory_ = (char *) malloc(max_elements * size_data_per_element_);
             input.read(data_level0_memory_, cur_element_count * size_data_per_element_);
