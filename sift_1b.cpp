@@ -204,19 +204,25 @@ struct Stats {
 	long double total;
 	long double std;
 	long double three_nines;
+	long double min;
+	long double max;
 };
 
 Stats calculate_stats(std::vector<float> &floats) {
 	// Note - floats will be sorted in place at the end
-	Stats stats;
-	stats.total = 0;
-	stats.mean = 0;
-	stats.std = 0;
-	stats.three_nines = 0;
+	Stats stats = {};
 	//cout << "calculating total" << endl;
 	long double squares = 0;
+	stats.min = std::numeric_limits<long double>::max();
+	stats.max = std::numeric_limits<long double>::min();
 	for (auto f: floats) {
 		stats.total += f;
+		if (f < stats.min) {
+			stats.min = f;
+		}
+		if (f > stats.max) {
+			stats.max = f;
+		}
 	}
 	//cout << "calculating mean" << endl;
 	stats.mean = stats.total / (long double)floats.size();
@@ -231,8 +237,12 @@ Stats calculate_stats(std::vector<float> &floats) {
 	//cout << "sorting" << endl;
         std::sort(floats.begin(), floats.end());
 	//cout << "three nines" << endl;
-        auto three_nines = std::ceil((99.9/100.0) * floats.size());
-        stats.three_nines = floats[three_nines];
+	if (floats.size() >= 1000) {
+		auto three_nines = std::ceil((99.9/100.0) * floats.size());
+		stats.three_nines = floats[three_nines];
+	} else {
+		stats.three_nines = std::numeric_limits<long double>::quiet_NaN();
+	}
 
 	return stats;
 }
@@ -250,8 +260,14 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
     //for (int i = 100; i < 500; i += 40) {
         //efs.push_back(i);
     //}
-	cout << "| run | #q| ef | " << k << "-recall | query_us | hier_us | L0_us | q_std | h_std | L0_std | q_999 | h_999 | L0_999 | batch_us | batch_hier_us | batch_L0_us" << endl;
-	cout << "|-----|-------|-----|----------|----------|---------|---------|---------|---------|---------|-------|-------|--------|"<< endl;
+	cout << "| run | #q| ef | " << k << "-recall | qps " 
+		<< "| query_us | hier_us | L0_us "
+		<< "| q_std | h_std | L0_std "
+		<< "| q_999 | h_999 | L0_999 "
+		<< "| q_min | h_min | L0_min "
+		<< "| q_max | h_max | L0_max "
+		<< "| batch_us | batch_hier_us | batch_L0_us" << endl;
+	cout << "|--|--|--|--|--||||||---|-------|-----|----------|----------|---------|---------|---------|---------|---------|-------|-------|--------|"<< endl;
 	for (size_t run = 1; run <= repeats; run++) {
 		//cout << "starting run " << run << endl;
 	    for (size_t ef : efs) {
@@ -274,10 +290,14 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
 				[](Times times) { return times.total_micros; });
 		auto total_stats = calculate_stats(total_times);
 
+		auto qps = 1000.0 / (total_stats.mean * n_queries);
 		cout << " | " << run << "|" << n_queries << "|" << ef << " | " << test_result.recall << "|" 
+			<< qps << "|"
 			<< total_stats.mean << "|" << ln_stats.mean << "|" << l0_stats.mean << "|"
 			<< total_stats.std << "|" << ln_stats.std << "|" << l0_stats.std << "|"
 			<< total_stats.three_nines << "|" << ln_stats.three_nines << "|" << l0_stats.three_nines << "|"
+			<< total_stats.min << "|" << ln_stats.min << "|" << l0_stats.min << "|"
+			<< total_stats.max << "|" << ln_stats.max << "|" << l0_stats.max << "|"
 			<< total_stats.total << "|" << ln_stats.total << "|" << l0_stats.total << "|"
 			<< endl;
 	    }
