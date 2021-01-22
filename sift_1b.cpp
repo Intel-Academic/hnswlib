@@ -250,7 +250,7 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
     //for (int i = 100; i < 500; i += 40) {
         //efs.push_back(i);
     //}
-	cout << "| run | #q| ef | " << k << "-recall | query_us | hier_us | l0_us | q_std | h_std | l0_std | q_999 | h_999 | l0_999 |" << endl;
+	cout << "| run | #q| ef | " << k << "-recall | query_us | hier_us | L0_us | q_std | h_std | L0_std | q_999 | h_999 | L0_999 | batch_us | batch_hier_us | batch_L0_us" << endl;
 	cout << "|-----|-------|-----|----------|----------|---------|---------|---------|---------|---------|-------|-------|--------|"<< endl;
 	for (size_t run = 1; run <= repeats; run++) {
 		//cout << "starting run " << run << endl;
@@ -278,6 +278,7 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
 			<< total_stats.mean << "|" << ln_stats.mean << "|" << l0_stats.mean << "|"
 			<< total_stats.std << "|" << ln_stats.std << "|" << l0_stats.std << "|"
 			<< total_stats.three_nines << "|" << ln_stats.three_nines << "|" << l0_stats.three_nines << "|"
+			<< total_stats.total << "|" << ln_stats.total << "|" << l0_stats.total << "|"
 			<< endl;
 	    }
 	}
