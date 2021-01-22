@@ -1221,7 +1221,7 @@ namespace hnswlib {
         QueryResult
         searchKnn(const void *query_data, size_t k) const {
 
-            QueryResult result;
+            QueryResult result = {};
             if (cur_element_count == 0) return result;
 	    StopW timer;
             tableint currObj = enterpoint_node_;

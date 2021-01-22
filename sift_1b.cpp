@@ -155,7 +155,7 @@ struct TestResult {
 static TestResult
 test_approx(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_queries, HierarchicalNSW<int> &appr_alg, size_t vecdim,
             vector<std::priority_queue<std::pair<int, labeltype >>> &answers, size_t k, bool permute) {
-	TestResult results;
+	TestResult results = {};
 	results.k = k;
     size_t correct = 0;
     size_t total = 0;
