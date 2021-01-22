@@ -350,8 +350,9 @@ void sift_test1B(
         inputGT.read((char *) &t, 4);
         inputGT.read((char *) (massQA + 1000 * i), t * 4);
         if (t != 1000) {
-            cout << "err";
-            return;
+            cout << "Expected rows with 1000 elements but got " << t 
+		    << " at line " << i + 1 << endl;
+	    return;
         }
     }
     inputGT.close();
