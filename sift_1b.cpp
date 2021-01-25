@@ -440,6 +440,7 @@ void sift_test1B(
         }
         input.close();
         cout << "Build time:" << 1e-6 * stopw_full.getElapsedTimeMicro() << "  seconds\n";
+	cout << "Hops: " << appr_alg->metric_hops <<  " distances: " << appr_alg->metric_distance_computations << endl;
         appr_alg->saveIndex(path_index);
     }
 
@@ -450,6 +451,7 @@ void sift_test1B(
     cout << "Loaded gt\n";
     for (int i = 0; i < 1; i++)
         test_vs_recall(massQ, qsize, vecsize, n_queries, *appr_alg, vecdim, answers, k, efs, repeats, permute);
+	cout << "Hops: " << appr_alg->metric_hops <<  " distances: " << appr_alg->metric_distance_computations << endl;
     cout << "Actual memory usage: " << getCurrentRSS() / 1000000 << " Mb \n";
     return;
 
