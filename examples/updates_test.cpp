@@ -138,14 +138,16 @@ test_vs_recall(std::vector<float> &queries, size_t qsize, hnswlib::HierarchicalN
     {
         appr_alg.setEf(ef);
 
-        appr_alg.metric_hops=0;
-        appr_alg.metric_distance_computations=0;
+        appr_alg.metric_hops_hier = 0;
+        appr_alg.metric_hops_l0 =0;
+        appr_alg.metric_distance_computations_hier=0;
+        appr_alg.metric_distance_computations_l0=0;
         StopW stopw = StopW();
 
         float recall = test_approx<float>(queries, qsize, appr_alg, vecdim, answers, k);
         float time_us_per_query = stopw.getElapsedTimeMicro() / qsize;
-        float distance_comp_per_query =  appr_alg.metric_distance_computations / (1.0f * qsize);
-        float hops_per_query =  appr_alg.metric_hops / (1.0f * qsize);
+        float distance_comp_per_query =  (appr_alg.metric_distance_computations_hier + appr_alg.metric_distance_computations_l0) / (1.0f * qsize);
+        float hops_per_query =  (appr_alg.metric_hops_hier + appr_alg.metric_hops_l0) / (1.0f * qsize);
 
         std::cout << ef << "\t" << recall << "\t" << time_us_per_query << "us \t"<<hops_per_query<<"\t"<<distance_comp_per_query << "\n";
         if (recall > 0.99)

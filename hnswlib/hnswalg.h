@@ -337,8 +337,10 @@ namespace hnswlib {
             return top_candidates;
         }
 
-        mutable std::atomic<long> metric_distance_computations;
-        mutable std::atomic<long> metric_hops;
+        mutable std::atomic<long> metric_distance_computations_l0;
+        mutable std::atomic<long> metric_distance_computations_hier;
+        mutable std::atomic<long> metric_hops_hier;
+        mutable std::atomic<long> metric_hops_l0;
 
         template <bool has_deletions, bool collect_metrics=true>
         std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
@@ -377,8 +379,8 @@ namespace hnswlib {
                 size_t size = getListCount((linklistsizeint*)data);
 //                bool cur_node_deleted = isMarkedDeleted(current_node_id);
                 if(collect_metrics){
-                    metric_hops++;
-                    metric_distance_computations+=size;
+                    metric_hops_l0++;
+                    metric_distance_computations_l0 +=size;
                 }
 
 #ifdef USE_SSE
@@ -1235,8 +1237,8 @@ namespace hnswlib {
 
                     data = (unsigned int *) get_linklist(currObj, level);
                     int size = getListCount(data);
-                    metric_hops++;
-                    metric_distance_computations+=size;
+                    metric_hops_hier++;
+                    metric_distance_computations_hier+=size;
 
                     tableint *datal = (tableint *) (data + 1);
                     for (int i = 0; i < size; i++) {
