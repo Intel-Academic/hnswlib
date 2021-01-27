@@ -290,7 +290,7 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
 				[](Times times) { return times.total_micros; });
 		auto total_stats = calculate_stats(total_times);
 
-		auto qps = n_queries / (total_stats.total / 1000.0);
+		auto qps = n_queries / (total_stats.total / (1000.0 * 1000.0));
 		cout << " | " << run << "|" << n_queries << "|" << ef << " | " << test_result.recall << "|" 
 			<< qps << "|"
 			<< total_stats.mean << "|" << ln_stats.mean << "|" << l0_stats.mean << "|"
