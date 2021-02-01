@@ -164,8 +164,10 @@ test_approx(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_queries
     vector<size_t> permutation(qsize);
     //cout << "permuting" << endl;
     std::iota(permutation.begin(), permutation.end(), 0);
+    std::random_device rng;
+    std::mt19937 urng(rng());
     if (permute) {
-	    std::random_shuffle(permutation.begin(), permutation.end());
+	    std::shuffle(permutation.begin(), permutation.end(), urng);
     }
     //cout << "running queries" << endl;
     for (int i = 0; i < n_queries; i++) {
