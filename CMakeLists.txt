@@ -1,5 +1,5 @@
 cmake_minimum_required (VERSION 2.6)
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 project (hnsw_lib)
 
@@ -16,7 +16,7 @@ add_library(sift_test STATIC ${SOURCE_LIB})
 
 add_executable(main ${SOURCE_EXE})
 if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-  SET( CMAKE_CXX_FLAGS  "-Ofast -DNDEBUG -openmp -march=native -fpic -ftree-vectorize")
+  SET( CMAKE_CXX_FLAGS  "-Ofast -DNDEBUG -openmp -march=native -fpic -pthread -ftree-vectorize")
 elseif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 SET( CMAKE_CXX_FLAGS  "-Ofast -lrt -DNDEBUG -openmp -march=native -fpic -w -fopenmp -ftree-vectorize -ftree-vectorizer-verbose=0" )
 elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")

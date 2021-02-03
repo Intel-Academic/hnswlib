@@ -1,5 +1,6 @@
 #pragma once
 #include "hnswlib.h"
+#include <tuple>
 
 namespace hnswlib {
 
@@ -55,6 +56,100 @@ namespace hnswlib {
         return TmpRes[0] + TmpRes[1] + TmpRes[2] + TmpRes[3] + TmpRes[4] + TmpRes[5] + TmpRes[6] + TmpRes[7];
     }
 
+static inline std::tuple<__m512i, __m512i> u8s_to_i16s(const void * input) {
+	//Read 64 bytes, convert into two i16x32s (i.e. 64 int16s).
+	auto inc = (const unsigned char*)input;
+	__m256i in_0 = _mm256_loadu_si256((__m256i const *) input);
+	__m256i in_1 = _mm256_loadu_si256((__m256i const * )(inc + 32));
+	__m512i out_0 = _mm512_cvtepu8_epi16(in_0);
+	__m512i out_1 = _mm512_cvtepu8_epi16(in_1);
+
+	//uint16_t left_check[32];
+	//uint16_t right_check[32];
+
+	//_mm512_storeu_si512(&left_check, out_0);
+	//_mm512_storeu_si512(&right_check, out_1);
+	//for (auto i = 0; i < 32; i++) {
+		//uint16_t orig = *(((unsigned char *)input) + i);
+		//if (left_check[i] != orig) {
+		//std::cout << "at " << i << ": left " << left_check[i] << " orig: " << orig << std::endl;
+			//throw std::runtime_error("bad exraction!");
+		//}
+	//}
+	
+	//for (auto i = 0; i < 32; i++) {
+		//uint16_t orig = *(((unsigned char *)input) + 32 + i);
+		//if (right_check[i] != orig) {
+			//throw std::runtime_error("bad exraction!");
+		//}
+		////std::cout << " right: " << right_check[i] << " orig: " << orig << std::endl;
+	//}
+	std::tuple<__m512i, __m512i> result(out_0, out_1);
+
+	return result;
+}
+
+// Works only for bytes, in multiples of 64!
+//TODO hide behind more specific flag than AVX
+
+    	static int L2SqrI(const void* __restrict pVect1, const void* __restrict pVect2, const void* __restrict qty_ptr);
+
+	static int
+	L2SqrSIMDVNNI_u8_x64(const void * __restrict pVect1v, const void * __restrict pVect2v, const void * __restrict qty_ptr) {
+		auto *pVect1 = (const unsigned char *) pVect1v;
+		auto *pVect2 = (const unsigned char *) pVect2v;
+		size_t qty = *((size_t *) qty_ptr);
+		const unsigned char *pEnd1 = pVect1 + qty;
+
+		__m512i sum = _mm512_setzero_epi32();
+		__m512i diff;
+		std::tuple<__m512i, __m512i> v1, v2;
+
+		//uint16_t lefti[128];
+		//uint16_t righti[128];
+		auto result = 0;
+		//auto offset = 0;
+		while (pVect1 < pEnd1) {
+			//if (offset > 64) {
+				//throw new std::runtime_error("hey!");
+			//}
+			v1 = u8s_to_i16s(pVect1);
+			v2 = u8s_to_i16s(pVect2);
+			pVect1 += 64;
+			pVect2 += 64;
+			auto l0 = std::get<0>(v1);
+			auto r0 = std::get<0>(v2);
+			//_mm512_storeu_si512(lefti + offset, l0);
+			//_mm512_storeu_si512(righti + offset, r0);
+			auto l1 = std::get<1>(v1);
+			auto r1 = std::get<1>(v2);
+			//_mm512_storeu_si512(lefti + (offset + 32), l1);
+			//_mm512_storeu_si512(righti + (offset + 32), r1);
+			//offset += 64;
+
+		    diff = _mm512_sub_epi16(l0, r0);
+		     //sum = _mm512_setzero_epi32();
+		    sum = _mm512_dpwssd_epi32(sum, diff, diff);
+		    //result += _mm512_reduce_add_epi32(sum);
+		    diff = _mm512_sub_epi16(l1, r1);
+		     //sum = _mm512_setzero_epi32();
+		    sum = _mm512_dpwssd_epi32(sum, diff, diff);
+		    //result += _mm512_reduce_add_epi32(sum);
+		}
+		result = _mm512_reduce_add_epi32(sum);
+		//auto expected = L2SqrI(pVect1v, pVect2v, qty_ptr);
+		//if (result != expected) {
+			//pVect1 = (const unsigned char *) pVect1v;
+			//pVect2 = (const unsigned char *) pVect2v;
+			//for(auto i = 0; i < 128; i++) {
+				//std::cout << "lc " << +*(pVect1 + i) << " li " << lefti[i] 
+					//<< " rc " << +*(pVect2 + i) << " ri "<< righti[i] << std::endl;
+			//}
+			//std::cout << "Expected  " << expected << ", got " << result << std::endl;
+			//throw std::runtime_error("wrong!");
+		//}
+		return result;
+	}
 #elif defined(USE_SSE)
 
     static float
@@ -245,6 +340,7 @@ namespace hnswlib {
         return (res);
     }
 
+//TODO: SpaceInterface needs 2 parameters, one for result type and one for element type?
     class L2SpaceI : public SpaceInterface<int> {
 
         DISTFUNC<int> fstdistfunc_;
@@ -252,7 +348,15 @@ namespace hnswlib {
         size_t dim_;
     public:
         L2SpaceI(size_t dim) {
-            if(dim % 4 == 0) {
+		if (dim % 64 == 0) {
+#ifdef USE_AVX
+			std::cout << "Using accelerated vnni distance" << std::endl;
+			fstdistfunc_ = L2SqrSIMDVNNI_u8_x64;
+#else
+
+	                fstdistfunc_ = L2SqrI4x;
+#endif
+		} else if(dim % 4 == 0) {
                 fstdistfunc_ = L2SqrI4x;
             }
             else {
