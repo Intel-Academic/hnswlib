@@ -155,9 +155,7 @@ namespace hnswlib {
             enterpoint_node_ = -1;
             maxlevel_ = -1;
 
-            linkLists_ = (char **) malloc(sizeof(void *) * max_elements_);
-            if (linkLists_ == nullptr)
-                throw std::runtime_error("Not enough memory: HierarchicalNSW failed to allocate linklists");
+	    init_lists();
             size_links_per_element_ = maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
             mult_ = 1 / log(1.0 * M_);
             revSize_ = 1.0 / mult_;
@@ -170,17 +168,28 @@ namespace hnswlib {
             }
         };
 
+	void init_lists() {
+
+            linkLists_ = (char **) malloc(sizeof(void *) * max_elements_);
+            if (linkLists_ == nullptr)
+                throw std::runtime_error("Not enough memory: HierarchicalNSW failed to allocate linklists");
+	}
+
+	void free_lists() {
+            for (tableint i = 0; i < cur_element_count; i++) {
+                if (element_levels_[i] > 0)
+                    free(linkLists_[i]);
+            }
+            free(linkLists_);
+	}
+
         ~HierarchicalNSW() {
 #ifdef HNSW_MMAP
 		unmap_file(level0_mapping_);
 #else
             free(data_level0_memory_);
 #endif
-            for (tableint i = 0; i < cur_element_count; i++) {
-                if (element_levels_[i] > 0)
-                    free(linkLists_[i]);
-            }
-            free(linkLists_);
+	    free_lists();
             delete visited_list_pool_;
         }
 
@@ -1331,6 +1340,33 @@ namespace hnswlib {
             std::cout << "integrity ok, checked " << connections_checked << " connections\n";
             
         }
+
+	void hm_ann_promote(std::vector<size_t> level_sizes) {
+		std::vector<size_t> degrees;
+		degrees.reserve(cur_element_count);
+		for(auto i = 0; i < cur_element_count; i++) {
+			auto size = getListCount(get_linklist0(i));
+			degrees.push_back(size);
+		}
+		std::vector<size_t> indices(degrees.size());
+		std::iota(indices.begin(), indices.end(), 0);
+		//Sort indices by degree of node at that index, descending
+		std::stable_sort(indices.begin(), indices.end(), 
+				[&degrees](size_t l, size_t r) { return degrees[l] > degrees[r]; });
+		free_lists();
+		init_lists();
+		auto entry_point = indices[0];
+		for (auto v:indices) {
+			for (auto i = level_sizes.size(); i >= 1; i--) {
+				if (level_sizes[i-1] == 0)  {
+					auto point = getDataByInternalId(v);
+					auto w = searchBaseLayer(point, entry_point, i);
+
+				} else {
+				}
+			}
+		}
+	}
 
     };
 

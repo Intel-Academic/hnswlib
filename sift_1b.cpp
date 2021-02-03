@@ -438,9 +438,9 @@ void sift_test1B(
             }
             appr_alg->addPoint((void *) (mass), (size_t) j2);
 
-
         }
         input.close();
+	appr_alg->hm_ann_promote();
         cout << "Build time:" << 1e-6 * stopw_full.getElapsedTimeMicro() << "  seconds\n";
 	cout << "Hops: hier: " << appr_alg->metric_hops_hier <<  " L0: " << appr_alg->metric_distance_computations_hier << endl;
 	cout << " Distances: hier: " << appr_alg->metric_distance_computations_hier << " L0: " << appr_alg->metric_distance_computations_l0 << endl;
