@@ -155,12 +155,16 @@ namespace hnswlib {
             enterpoint_node_ = -1;
             maxlevel_ = -1;
 
-            linkLists_ = (char **) malloc(sizeof(void *) * max_elements_);
-            if (linkLists_ == nullptr)
-                throw std::runtime_error("Not enough memory: HierarchicalNSW failed to allocate linklists");
+            init_lists();
             size_links_per_element_ = maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
             mult_ = 1 / log(1.0 * M_);
             revSize_ = 1.0 / mult_;
+        }
+
+        void init_lists() {
+            linkLists_ = (char **) malloc(sizeof(void *) * max_elements_);
+            if (linkLists_ == nullptr)
+                throw std::runtime_error("Not enough memory: HierarchicalNSW failed to allocate linklists");
         }
 
         struct CompareByFirst {
@@ -176,12 +180,16 @@ namespace hnswlib {
 #else
             free(data_level0_memory_);
 #endif
+            free_lists();
+            delete visited_list_pool_;
+        }
+
+        void free_lists() {
             for (tableint i = 0; i < cur_element_count; i++) {
                 if (element_levels_[i] > 0)
                     free(linkLists_[i]);
             }
             free(linkLists_);
-            delete visited_list_pool_;
         }
 
         size_t max_elements_;
@@ -1137,10 +1145,7 @@ namespace hnswlib {
 
 
             if (curlevel) {
-                linkLists_[cur_c] = (char *) malloc(size_links_per_element_ * curlevel + 1);
-                if (linkLists_[cur_c] == nullptr)
-                    throw std::runtime_error("Not enough memory: addPoint failed to allocate linklist");
-                memset(linkLists_[cur_c], 0, size_links_per_element_ * curlevel + 1);
+                init_list(cur_c, curlevel);
             }
 
             if ((signed)currObj != -1) {
@@ -1204,6 +1209,13 @@ namespace hnswlib {
                 maxlevel_ = curlevel;
             }
             return cur_c;
+        }
+
+        void init_list(tableint internal_id, size_t level) {
+            linkLists_[internal_id] = (char *) malloc(size_links_per_element_ * level + 1);
+            if (linkLists_[internal_id] == nullptr)
+                throw std::runtime_error("Not enough memory: addPoint failed to allocate linklist");
+            memset(linkLists_[internal_id], 0, size_links_per_element_ * level + 1);
         };
 
         QueryResult
@@ -1317,6 +1329,66 @@ namespace hnswlib {
             
         }
 
+        size_t get_m(size_t level) {
+            if (level == 0 || level == 1) {
+                return M_ * 2;
+            }
+            return M_;
+        }
+
+        void hm_ann_promote(std::vector<size_t> level_sizes) {
+            if (level_sizes.empty()) {
+                std::cerr << "WARNING: no level sizes, database will have no hierarchy" << std::endl;
+            }
+            std::cout << "Promoting with levels ";
+            std::copy(level_sizes.begin(), level_sizes.end(),
+                      std::ostream_iterator<size_t>(std::cout, " "));
+            std::cout << std::endl;
+            std::vector<size_t> degrees;
+            degrees.reserve(cur_element_count);
+            for (auto i = 0; i < cur_element_count; i++) {
+                auto size = getListCount(get_linklist0(i));
+                degrees.push_back(size);
+            }
+            std::vector<size_t> indices(degrees.size());
+            std::iota(indices.begin(), indices.end(), 0);
+            //Sort indices by degree of node at that index, descending
+            std::stable_sort(indices.begin(), indices.end(),
+                             [&degrees](size_t l, size_t r) { return degrees[l] > degrees[r]; });
+
+            //Clear old level info
+            free_lists();
+            init_lists();
+            for (int i = 0; i < max_elements_; ++i) {
+                element_levels_[i] = 0;
+            }
+            //Put the entry point in the highest level
+            auto entry_point = indices[0];
+            maxlevel_ = level_sizes.size();
+            init_list(entry_point, maxlevel_);
+            element_levels_[entry_point] = maxlevel_;
+            for (auto it = ++(indices.cbegin()); it < indices.cend(); it++) {
+                auto v = (*it);
+                auto data_point = getDataByInternalId(v);
+                for (auto i = level_sizes.size(); i >= 1; i--) {
+                    if (level_sizes[i - 1] == 0) {
+                        entry_point = find_closest_neighbor(entry_point, data_point, i);
+                    } else {
+                        element_levels_[v] = i;
+                        init_list(v, i);
+//                        std::cout << "Placing " << v << " in level " << i << std::endl;
+                        for (auto j = i; j >= 1; j--) {
+                            auto w = searchBaseLayer(entry_point, data_point, i);
+                            getNeighborsByHeuristic2(w, get_m(i));
+                            mutuallyConnectNewElement(data_point, v, w, i, true);
+                            //TODO: shrink connections?
+                            level_sizes[i]--;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
     };
 
 }
