@@ -89,8 +89,8 @@ static inline std::tuple<__m512i, __m512i> u8s_to_i16s(const void * input) {
 	return result;
 }
 
+#ifdef __AVX512F__
 // Works only for bytes, in multiples of 64!
-//TODO hide behind more specific flag than AVX
 
     	static int L2SqrI(const void* __restrict pVect1, const void* __restrict pVect2, const void* __restrict qty_ptr);
 
@@ -150,6 +150,8 @@ static inline std::tuple<__m512i, __m512i> u8s_to_i16s(const void * input) {
 		//}
 		return result;
 	}
+#endif
+
 #elif defined(USE_SSE)
 
     static float
@@ -349,7 +351,7 @@ static inline std::tuple<__m512i, __m512i> u8s_to_i16s(const void * input) {
     public:
         L2SpaceI(size_t dim) {
 		if (dim % 64 == 0) {
-#ifdef USE_AVX
+#if defined(USE_AVX) && defined(__AVX512F__)
 			std::cout << "Using accelerated vnni distance" << std::endl;
 			fstdistfunc_ = L2SqrSIMDVNNI_u8_x64;
 #else

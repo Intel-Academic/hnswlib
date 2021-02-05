@@ -287,14 +287,8 @@ namespace hnswlib {
 
                 std::unique_lock <std::mutex> lock(link_list_locks_[curNodeNum]);
 
-                int *data;// = (int *)(linkList0_ + curNodeNum * size_links_per_element0_);
-                if (layer == 0) {
-                    data = (int*)get_linklist0(curNodeNum);
-                } else {
-                    data = (int*)get_linklist(curNodeNum, layer);
-//                    data = (int *) (linkLists_[curNodeNum] + (layer - 1) * size_links_per_element_);
-                }
-                size_t size = getListCount((linklistsizeint*)data);
+                linklistsizeint *data = get_linklist_at_level(curNodeNum, layer);
+                size_t size = getListCount(data);
                 tableint *datal = (tableint *) (data + 1);
 #ifdef USE_SSE
                 _mm_prefetch((char *) (visited_array + *(data + 1)), _MM_HINT_T0);
@@ -508,11 +502,7 @@ namespace hnswlib {
             tableint next_closest_entry_point = selectedNeighbors[0];
 
             {
-                linklistsizeint *ll_cur;
-                if (level == 0)
-                    ll_cur = get_linklist0(cur_c);
-                else
-                    ll_cur = get_linklist(cur_c, level);
+                linklistsizeint *ll_cur = get_linklist_at_level(cur_c, level);
 
                 if (*ll_cur && !isUpdate) {
                     throw std::runtime_error("The newly inserted element should have blank link list");
@@ -534,12 +524,7 @@ namespace hnswlib {
 
                 std::unique_lock <std::mutex> lock(link_list_locks_[selectedNeighbors[idx]]);
 
-                linklistsizeint *ll_other;
-                if (level == 0)
-                    ll_other = get_linklist0(selectedNeighbors[idx]);
-                else
-                    ll_other = get_linklist(selectedNeighbors[idx], level);
-
+                linklistsizeint *ll_other = get_linklist_at_level(selectedNeighbors[idx], level);
                 size_t sz_link_list_other = getListCount(ll_other);
 
                 if (sz_link_list_other > Mcurmax)
