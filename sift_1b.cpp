@@ -4,7 +4,7 @@
 
 #define HNSW_MMAP
 
-#include "hnswlib/hnswlib.h"
+#include "hnswlib/hm_ann.h"
 
 
 #include <unordered_set>
@@ -313,6 +313,7 @@ inline bool exists_test(const std::string &name) {
 
 
 void sift_test1B(
+        std::string &algorithm,
 		    int subset_size_milllions,
 		    int M, 
 		    int efConstruction,
@@ -387,13 +388,20 @@ void sift_test1B(
     HierarchicalNSW<int> *appr_alg;
     if (exists_test(path_index)) {
         cout << "Loading index from " << path_index << ":\n";
-        appr_alg = new HierarchicalNSW<int>(&l2space, path_index, false, 0, path_l0);
+        if (algorithm == "hnsw") {
+            appr_alg = new HierarchicalNSW<int>(&l2space, path_index, false, 0, path_l0);
+        } else if (algorithm == "hm-ann"){
+            appr_alg = new HmAnn<int>(&l2space, path_index, false, 0, path_l0);
+        }
         cout << "Actual memory usage: " << getCurrentRSS() / 1000000 << " Mb \n";
     } else {
         cout << "No index  " << path_index << "found\n";
         cout << "Building index:\n";
-        appr_alg = new HierarchicalNSW<int>(&l2space, vecsize, M, efConstruction, path_l0);
-
+        if (algorithm == "hnsw") {
+            appr_alg = new HierarchicalNSW<int>(&l2space, vecsize, M, efConstruction, path_l0);
+        } else if (algorithm == "hm-ann") {
+            appr_alg = new HmAnn<int>(&l2space, vecsize, M, efConstruction, path_l0);
+        }
 
         input.read((char *) &in, 4);
         if (in != 128) {
@@ -441,6 +449,17 @@ void sift_test1B(
 
         }
         input.close();
+        if (auto hmann = dynamic_cast<HmAnn<int>*>(appr_alg)) {
+            std::vector<size_t> level_sizes;
+            cout << "Beginning HM-ANN modifications" << endl;
+            //TODO exponential
+            auto size = appr_alg->max_elements_;
+            while (size > 500) {
+                level_sizes.push_back(size);
+                size /= 500;
+            }
+            hmann->hm_ann_promote(level_sizes);
+        }
         cout << "Build time:" << 1e-6 * stopw_full.getElapsedTimeMicro() << "  seconds\n";
 	cout << "Hops: hier: " << appr_alg->metric_hops_hier <<  " L0: " << appr_alg->metric_distance_computations_hier << endl;
 	cout << " Distances: hier: " << appr_alg->metric_distance_computations_hier << " L0: " << appr_alg->metric_distance_computations_l0 << endl;
