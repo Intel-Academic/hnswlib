@@ -170,6 +170,7 @@ namespace hnswlib {
             linkLists_ = (char **) malloc(sizeof(void *) * max_elements_);
             if (linkLists_ == nullptr)
                 throw std::runtime_error("Not enough memory: HierarchicalNSW failed to allocate linklists");
+            memset(linkLists_, 0, sizeof(void *) * max_elements_);
         }
 
         struct CompareByFirst {
@@ -489,7 +490,7 @@ namespace hnswlib {
         };
 
         linklistsizeint *get_linklist(tableint internal_id, int level) const {
-            return (linklistsizeint *) (linkLists_[internal_id] + (level - 1) * size_links_per_element_);
+            return (linklistsizeint *) (linkLists_[internal_id] + list_size(level - 1) - 1);
         };
 
         linklistsizeint *get_linklist_at_level(tableint internal_id, int level) const {
@@ -505,6 +506,8 @@ namespace hnswlib {
             }
             if (level > 0) {
                 init_list(internal_id, level);
+            } else {
+                linkLists_[internal_id] = nullptr;
             }
         }
 
@@ -1233,7 +1236,7 @@ namespace hnswlib {
             return cur_c;
         }
 
-        size_t list_size(size_t level) {
+        size_t list_size(size_t level) const {
             auto sum = 1;
             for (int i = 1; i <= level; ++i) {
                 sum += get_m(level) * sizeof(tableint) + sizeof(linklistsizeint);
@@ -1372,7 +1375,7 @@ namespace hnswlib {
 
         }
 
-        virtual size_t get_m(size_t level) {
+        virtual size_t get_m(size_t level) const {
             if (level == 0) {
                 return M_ * 2;
             }
