@@ -74,10 +74,12 @@ namespace hnswlib {
                 auto v = (*it);
 //                std::cout << "Placing " << v << std::endl;
                 auto data_point = this->getDataByInternalId(v);
+                entry_point = this->enterpoint_node_;
                 for (auto i = level_sizes.size(); i >= 1; i--) {
                     if (level_sizes[i - 1] == 0) {
                         if (!flags[i - 1]) {
                             std::cout << "Filled level " << i << std::endl;
+                            this->checkIntegrity();
                             flags[i - 1] = true;
                         }
                         auto[closest, dist] = this->find_closest_neighbor(entry_point, data_point, i);

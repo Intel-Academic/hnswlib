@@ -512,8 +512,9 @@ namespace hnswlib {
         }
 
         void push_neighbor(tableint internal_id, int level, tableint n) {
-
-            linklistsizeint *ll_cur = get_linklist_at_level(internal_id, level);
+            if (level > maxlevel_)
+                throw std::runtime_error("Trying to add a neighbor on a non-existent level");
+            auto [data, size] = get_neighbors(internal_id, level);
 
             if (n == internal_id)
                 throw std::runtime_error("Trying to connect a node to itself");
@@ -521,17 +522,17 @@ namespace hnswlib {
                 throw std::runtime_error("Trying to make a link on a non-existent level");
             if (n > cur_element_count)
                 throw std::runtime_error("Trying to set invalid neighbor (too high)");
-            auto current_size = getListCount(ll_cur);
-            if (current_size >= get_m(level)) {
+            if (size >= get_m(level)) {
                 throw std::runtime_error("Trying to add too many neighbors");
             }
-            auto data = ll_cur + 1;
-            data[current_size] = n;
-            setListCount(ll_cur, current_size + 1);
+            data[size] = n;
+            setListCount(get_linklist_at_level(internal_id, level), size + 1);
         }
 
         void
         set_neighbors(tableint internal_id, int level, bool isUpdate, const std::vector<tableint> &neighbors) {
+            if (level > maxlevel_)
+                throw std::runtime_error("requested neighbors from a non-existent level");
 //            std::cout << "setting neighbors for " << internal_id << std::endl;
             linklistsizeint *ll_cur = get_linklist_at_level(internal_id, level);
 
@@ -546,7 +547,7 @@ namespace hnswlib {
                 throw std::runtime_error("neighbors vector longer than M for selected level");
             }
             setListCount(ll_cur, neighbors.size());
-            auto *data = (tableint *) (ll_cur + 1);
+            auto data = (tableint *) (ll_cur + 1);
             for (size_t idx = 0; idx < neighbors.size(); idx++) {
                 if (data[idx] && !isUpdate)
                     throw std::runtime_error("Possible memory corruption");
@@ -584,14 +585,12 @@ namespace hnswlib {
                 std::cerr << std::endl;
                 throw std::runtime_error("The newly inserted element should have blank link list");
             }
-            if (selectedNeighbors.size() > get_m(level)) {
+            auto size = selectedNeighbors.size();
+            if (size > get_m(level)) {
                 throw std::runtime_error("neighbors vector longer than M for selected level");
             }
-            setListCount(ll_cur, selectedNeighbors.size());
-            auto *data = (tableint *) (ll_cur + 1);
-            auto idx = 0;
-            while (!selectedNeighbors.empty()) {
-
+            auto data = (tableint *) (ll_cur + 1);
+            for (int idx = 0; idx < size; ++idx) {
                 if (data[idx] && !isUpdate)
                     throw std::runtime_error("Possible memory corruption");
 
@@ -604,8 +603,8 @@ namespace hnswlib {
                     throw std::runtime_error("Trying to set invalid neighbor (too high)");
                 data[idx] = n;
                 selectedNeighbors.pop();
-                idx++;
             }
+            setListCount(ll_cur, size);
         }
         tableint mutuallyConnectNewElement(const void *data_point, tableint cur_c,
                                            std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> &top_candidates,
@@ -1002,6 +1001,7 @@ namespace hnswlib {
         }
 
         void updatePoint(const void *dataPoint, tableint internalId, float updateNeighborProbability) {
+            throw std::runtime_error("updatePoint needs to be evaluated");
             // update the feature vector associated with existing point with new vector
             memcpy(getDataByInternalId(internalId), dataPoint, data_size_);
 
@@ -1361,13 +1361,19 @@ namespace hnswlib {
             }
         }
 
-        std::pair<tableint *, size_t> get_neighbors(tableint internal_id, int level) const {
+        std::pair<tableint *, size_t> get_neighbors(tableint internal_id, size_t level) const {
+            if (level > maxlevel_)
+                throw std::runtime_error("requested neighbors from a non-existent level");
+            if (level > element_levels_[internal_id])
+                throw std::runtime_error("requested neighbors from a level this node isn't in");
             auto data = get_linklist_at_level(internal_id, level);
             auto size = getListCount(data);
             return std::make_pair((tableint *) data + 1, size);
         };
 
         bool has_neighbor(tableint internal_id, int level, tableint neighbor) const {
+            if (level > maxlevel_)
+                throw std::runtime_error("requested neighbors from a non-existent level");
             auto [data, size] = get_neighbors(internal_id, level);
             for (int i = 0; i < size; ++i) {
                 if (data[i] == neighbor) {
@@ -1377,12 +1383,17 @@ namespace hnswlib {
             return false;
         }
 
-        std::pair<tableint, dist_t> find_closest_neighbor(tableint internal_id, void *query_point, int level) const {
+        std::pair<tableint, dist_t> find_closest_neighbor(tableint internal_id, void *query_point, size_t level) const {
+            if (level > maxlevel_)
+                throw std::runtime_error("requested neighbors from a non-existent level");
             auto best = std::numeric_limits<dist_t>::max();
             auto[data, size] = get_neighbors(internal_id, level);
             if (size > get_m(level)) {
                 std::cerr << internal_id << " had too many neighbors (" << size << ") on level " << level << std::endl;
-                throw std::runtime_error("too many neighbors found");
+                //Try to recover? What happens next?
+                size = get_m(level);
+                setListCount(get_linklist_at_level(internal_id, level), size);
+//                throw std::runtime_error("too many neighbors found");
             }
             auto opt = find_closer_neighbor(query_point, best, data, size);
             if (!opt.has_value()) {
