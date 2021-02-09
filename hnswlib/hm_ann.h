@@ -69,19 +69,24 @@ namespace hnswlib {
             this->enterpoint_node_ = entry_point;
             auto it = indices.cbegin();
             it++;
+            std::vector flags(level_sizes.size(), false);
             for (; it < indices.cend(); it++) {
                 auto v = (*it);
 //                std::cout << "Placing " << v << std::endl;
                 auto data_point = this->getDataByInternalId(v);
                 for (auto i = level_sizes.size(); i >= 1; i--) {
                     if (level_sizes[i - 1] == 0) {
+                        if (!flags[i - 1]) {
+                            std::cout << "Filled level " << i << std::endl;
+                            flags[i - 1] = true;
+                        }
                         auto[closest, dist] = this->find_closest_neighbor(entry_point, data_point, i);
                         entry_point = closest;
                     } else {
                         this->set_level(v, i);
 //                        std::cout << "Placing " << v << " in level " << i << std::endl;
                         for (auto j = i; j >= 1; j--) {
-                            auto w = this->searchBaseLayer(entry_point, data_point, i);
+                            auto w = this->searchBaseLayer(entry_point, data_point, j);
                             std::vector<std::pair<dist_t, tableint>> vec;
                             while (!w.empty()) {
                                 //Filter out self-references, TODO why is this even happening?

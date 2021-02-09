@@ -449,16 +449,24 @@ void sift_test1B(
 
         }
         input.close();
+        appr_alg->checkIntegrity();
         if (auto hmann = dynamic_cast<HmAnn<int>*>(appr_alg)) {
             std::vector<size_t> level_sizes;
             cout << "Beginning HM-ANN modifications" << endl;
-            //TODO exponential
             auto size = appr_alg->max_elements_;
-            while (size > 500) {
+            auto promotion_rate = 0.16; // from HM-ANN paper
+            auto min_level_size = 50; // arbitrary TODO justify
+            while (size > min_level_size / promotion_rate) {
                 level_sizes.push_back(size);
-                size /= 500;
+                size *= promotion_rate;
             }
+            std::cout << "Level sizes: ";
+            for (int i = 0; i < level_sizes.size(); ++i) {
+                std::cout << "L" << i << ": " << level_sizes[i];
+            }
+            std::cout << std::endl;
             hmann->hm_ann_promote(level_sizes);
+            appr_alg->checkIntegrity();
         }
         cout << "Build time:" << 1e-6 * stopw_full.getElapsedTimeMicro() << "  seconds\n";
 	cout << "Hops: hier: " << appr_alg->metric_hops_hier <<  " L0: " << appr_alg->metric_distance_computations_hier << endl;

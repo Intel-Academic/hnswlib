@@ -127,15 +127,15 @@ namespace hnswlib {
             fstdistfunc_ = s->get_dist_func();
             dist_func_param_ = s->get_dist_func_param();
             M_ = M;
-            maxM_ = M_;
-            maxM0_ = M_ * 2;
+//            maxM_ = M_;
+//            maxM0_ = M_ * 2;
             ef_construction_ = std::max(ef_construction, M_);
             ef_ = 10;
 
             level_generator_.seed(random_seed);
             update_probability_generator_.seed(random_seed + 1);
 
-            size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
+            size_links_level0_ = get_m(0) * sizeof(tableint) + sizeof(linklistsizeint);
             size_data_per_element_ = size_links_level0_ + data_size_ + sizeof(labeltype);
             offsetData_ = size_links_level0_;
             label_offset_ = size_links_level0_ + data_size_;
@@ -161,7 +161,7 @@ namespace hnswlib {
             maxlevel_ = -1;
 
             init_lists();
-            size_links_per_element_ = maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
+//            size_links_per_element_ = maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
             mult_ = 1 / log(1.0 * M_);
             revSize_ = 1.0 / mult_;
         }
@@ -169,7 +169,7 @@ namespace hnswlib {
         void init_lists() {
             linkLists_ = (char **) malloc(sizeof(void *) * max_elements_);
             if (linkLists_ == nullptr)
-                throw std::runtime_error("Not enough memory: HierarchicalNSW failed to allocate linklists");
+                throw std::runtime_error("Not enough memory: failed to allocate linklists");
             memset(linkLists_, 0, sizeof(void *) * max_elements_);
         }
 
@@ -201,11 +201,11 @@ namespace hnswlib {
         size_t max_elements_;
         size_t cur_element_count;
         size_t size_data_per_element_;
-        size_t size_links_per_element_;
+//        size_t size_links_per_element_;
 
         size_t M_;
-        size_t maxM_;
-        size_t maxM0_;
+//        size_t maxM_;
+//        size_t maxM0_;
         size_t ef_construction_;
 
         double mult_, revSize_;
@@ -303,7 +303,7 @@ namespace hnswlib {
 
                 std::unique_lock<std::mutex> lock(link_list_locks_[curNodeNum]);
 
-                auto [datal, size] = get_neighbors(curNodeNum, layer);
+                auto[datal, size] = get_neighbors(curNodeNum, layer);
 #ifdef USE_SSE
                 _mm_prefetch((char *) (visited_array + *(datal)), _MM_HINT_T0);
                 _mm_prefetch((char *) (visited_array + *(datal) + 64), _MM_HINT_T0);
@@ -511,30 +511,102 @@ namespace hnswlib {
             }
         }
 
+        void push_neighbor(tableint internal_id, int level, tableint n) {
+
+            linklistsizeint *ll_cur = get_linklist_at_level(internal_id, level);
+
+            if (n == internal_id)
+                throw std::runtime_error("Trying to connect a node to itself");
+            if (level > element_levels_[n])
+                throw std::runtime_error("Trying to make a link on a non-existent level");
+            if (n > cur_element_count)
+                throw std::runtime_error("Trying to set invalid neighbor (too high)");
+            auto current_size = getListCount(ll_cur);
+            if (current_size >= get_m(level)) {
+                throw std::runtime_error("Trying to add too many neighbors");
+            }
+            auto data = ll_cur + 1;
+            data[current_size] = n;
+            setListCount(ll_cur, current_size + 1);
+        }
+
         void
-        set_neighbors(tableint internal_id, int level, bool isUpdate, const std::vector<tableint> &selectedNeighbors) {
+        set_neighbors(tableint internal_id, int level, bool isUpdate, const std::vector<tableint> &neighbors) {
+//            std::cout << "setting neighbors for " << internal_id << std::endl;
             linklistsizeint *ll_cur = get_linklist_at_level(internal_id, level);
 
             if (*ll_cur && !isUpdate) {
+                std::cerr << "Setting neighbors, but existing neighbors were found: ";
+                std::copy(ll_cur + 1, ll_cur + 1 + getListCount(ll_cur),
+                          std::ostream_iterator<size_t>(std::cerr, " "));
+                std::cerr << std::endl;
                 throw std::runtime_error("The newly inserted element should have blank link list");
             }
-            setListCount(ll_cur, selectedNeighbors.size());
+            if (neighbors.size() > get_m(level)) {
+                throw std::runtime_error("neighbors vector longer than M for selected level");
+            }
+            setListCount(ll_cur, neighbors.size());
             auto *data = (tableint *) (ll_cur + 1);
-            for (size_t idx = 0; idx < selectedNeighbors.size(); idx++) {
+            for (size_t idx = 0; idx < neighbors.size(); idx++) {
                 if (data[idx] && !isUpdate)
                     throw std::runtime_error("Possible memory corruption");
 
-                auto n = selectedNeighbors[idx];
+                auto n = neighbors[idx];
                 if (n == internal_id)
                     throw std::runtime_error("Trying to connect a node to itself");
                 if (level > element_levels_[n])
                     throw std::runtime_error("Trying to make a link on a non-existent level");
-
+                if (n > cur_element_count)
+                    throw std::runtime_error("Trying to set invalid neighbor (too high)");
                 data[idx] = n;
-
+            }
+            //TODO remove
+            auto [ns, sz] = get_neighbors(internal_id, level);
+            if (sz != neighbors.size()) {
+                throw std::runtime_error("set neighbors failed - sizes differ");
+            }
+            for (int i = 0; i < sz; ++i) {
+                if (neighbors[i] != ns[i]) {
+                    throw std::runtime_error("didn't set neighbors correctly");
+                }
             }
         }
 
+        template<typename C>
+        void set_neighbors(tableint internal_id, int level, bool isUpdate,
+                           std::priority_queue<std::pair<dist_t, tableint>, C, CompareByFirst> &selectedNeighbors) {
+            linklistsizeint *ll_cur = get_linklist_at_level(internal_id, level);
+
+            if (*ll_cur && !isUpdate) {
+                std::cerr << "Setting neighbors, but existing neighbors were found: ";
+                std::copy(ll_cur + 1, ll_cur + 1 + getListCount(ll_cur),
+                          std::ostream_iterator<size_t>(std::cerr, " "));
+                std::cerr << std::endl;
+                throw std::runtime_error("The newly inserted element should have blank link list");
+            }
+            if (selectedNeighbors.size() > get_m(level)) {
+                throw std::runtime_error("neighbors vector longer than M for selected level");
+            }
+            setListCount(ll_cur, selectedNeighbors.size());
+            auto *data = (tableint *) (ll_cur + 1);
+            auto idx = 0;
+            while (!selectedNeighbors.empty()) {
+
+                if (data[idx] && !isUpdate)
+                    throw std::runtime_error("Possible memory corruption");
+
+                auto [d, n] = selectedNeighbors.top();
+                if (n == internal_id)
+                    throw std::runtime_error("Trying to connect a node to itself");
+                if (level > element_levels_[n])
+                    throw std::runtime_error("Trying to make a link on a non-existent level");
+                if (n > cur_element_count)
+                    throw std::runtime_error("Trying to set invalid neighbor (too high)");
+                data[idx] = n;
+                selectedNeighbors.pop();
+                idx++;
+            }
+        }
         tableint mutuallyConnectNewElement(const void *data_point, tableint cur_c,
                                            std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> &top_candidates,
                                            int level, bool isUpdate) {
@@ -558,37 +630,19 @@ namespace hnswlib {
 
                 std::unique_lock<std::mutex> lock(link_list_locks_[selectedNeighbors[idx]]);
 
-                linklistsizeint *ll_other = get_linklist_at_level(selectedNeighbors[idx], level);
-                size_t sz_link_list_other = getListCount(ll_other);
+                auto [data, sz_link_list_other] = get_neighbors(selectedNeighbors[idx], level);
 
-                if (sz_link_list_other > Mcurmax)
-                    throw std::runtime_error("Bad value of sz_link_list_other");
-                if (selectedNeighbors[idx] == cur_c)
-                    throw std::runtime_error("Trying to connect an element to itself");
-                if (level > element_levels_[selectedNeighbors[idx]])
-                    throw std::runtime_error("Trying to make a link on a non-existent level");
-
-                tableint *data = (tableint *) (ll_other + 1);
-
-                bool is_cur_c_present = false;
-                if (isUpdate) {
-                    for (size_t j = 0; j < sz_link_list_other; j++) {
-                        if (data[j] == cur_c) {
-                            is_cur_c_present = true;
-                            break;
-                        }
-                    }
-                }
+                bool is_cur_c_present = has_neighbor(selectedNeighbors[idx], level, cur_c);
 
                 // If cur_c is already present in the neighboring connections of `selectedNeighbors[idx]` then no need to modify any connections or run the heuristics.
                 if (!is_cur_c_present) {
                     if (sz_link_list_other < Mcurmax) {
-                        data[sz_link_list_other] = cur_c;
-                        setListCount(ll_other, sz_link_list_other + 1);
+                        push_neighbor(selectedNeighbors[idx], level, cur_c);
                     } else {
+                        auto selected = getDataByInternalId(selectedNeighbors[idx]);
                         // finding the "weakest" element to replace it with the new one
                         dist_t d_max = fstdistfunc_(getDataByInternalId(cur_c),
-                                                    getDataByInternalId(selectedNeighbors[idx]),
+                                                    selected,
                                                     dist_func_param_);
                         // Heuristic:
                         std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> candidates;
@@ -597,32 +651,12 @@ namespace hnswlib {
                         for (size_t j = 0; j < sz_link_list_other; j++) {
                             candidates.emplace(
                                     fstdistfunc_(getDataByInternalId(data[j]),
-                                                 getDataByInternalId(selectedNeighbors[idx]),
+                                                 selected,
                                                  dist_func_param_), data[j]);
                         }
 
                         getNeighborsByHeuristic2(candidates, Mcurmax);
-
-                        int indx = 0;
-                        while (candidates.size() > 0) {
-                            data[indx] = candidates.top().second;
-                            candidates.pop();
-                            indx++;
-                        }
-
-                        setListCount(ll_other, indx);
-                        // Nearest K:
-                        /*int indx = -1;
-                        for (int j = 0; j < sz_link_list_other; j++) {
-                            dist_t d = fstdistfunc_(getDataByInternalId(data[j]), getDataByInternalId(rez[idx]), dist_func_param_);
-                            if (d > d_max) {
-                                indx = j;
-                                d_max = d;
-                            }
-                        }
-                        if (indx >= 0) {
-                            data[indx] = cur_c;
-                        } */
+                        set_neighbors(selectedNeighbors[idx], level, true, candidates);
                     }
                 }
             }
@@ -646,15 +680,15 @@ namespace hnswlib {
                 bool changed = true;
                 while (changed) {
                     changed = false;
-                    auto [neighbors, size] = get_neighbors(currObj, level);
+                    auto[neighbors, size] = get_neighbors(currObj, level);
                     auto closer = find_closer_neighbor(query_data, curdist, neighbors, size);
                     if (closer.has_value()) {
                         metric_hops_hier++;
                         metric_distance_computations_hier += size;
-                       auto [closer_id, closer_dist] = closer.value();
-                       curdist = closer_dist;
-                       currObj = closer_id;
-                       changed = true;
+                        auto[closer_id, closer_dist] = closer.value();
+                        curdist = closer_dist;
+                        currObj = closer_id;
+                        changed = true;
                     }
                 }
             }
@@ -730,9 +764,9 @@ namespace hnswlib {
             writeBinaryPOD(output, offsetData_);
             writeBinaryPOD(output, maxlevel_);
             writeBinaryPOD(output, enterpoint_node_);
-            writeBinaryPOD(output, maxM_);
+            writeBinaryPOD(output, M_); //Originally maxM_, now just here for compat.
 
-            writeBinaryPOD(output, maxM0_);
+            writeBinaryPOD(output, get_m(0)); //Originally maxM0_
             writeBinaryPOD(output, M_);
             writeBinaryPOD(output, mult_);
             writeBinaryPOD(output, ef_construction_);
@@ -743,7 +777,7 @@ namespace hnswlib {
 #endif
 
             for (size_t i = 0; i < cur_element_count; i++) {
-                unsigned int linkListSize = element_levels_[i] > 0 ? size_links_per_element_ * element_levels_[i] : 0;
+                unsigned int linkListSize = element_levels_[i] > 0 ? list_size(element_levels_[i]) : 0;
                 writeBinaryPOD(output, linkListSize);
                 if (linkListSize)
                     output.write(linkLists_[i], linkListSize);
@@ -781,8 +815,11 @@ namespace hnswlib {
             readBinaryPOD(input, maxlevel_);
             readBinaryPOD(input, enterpoint_node_);
 
-            readBinaryPOD(input, maxM_);
-            readBinaryPOD(input, maxM0_);
+            size_t dummy_maxM; //originally maxM_
+            size_t dummy_maxM0; //originally maxM0_
+
+            readBinaryPOD(input, dummy_maxM); // originally maxM_
+            readBinaryPOD(input, dummy_maxM0); //originally maxM_0
             readBinaryPOD(input, M_);
             readBinaryPOD(input, mult_);
             readBinaryPOD(input, ef_construction_);
@@ -846,7 +883,7 @@ namespace hnswlib {
             //size_links_per_element_ = maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
 
 
-            size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
+            size_links_level0_ = get_m(0) * sizeof(tableint) + sizeof(linklistsizeint);
             std::vector<std::mutex>(max_elements).swap(link_list_locks_);
             std::vector<std::mutex>(max_update_element_locks).swap(link_list_update_locks_);
 
@@ -868,7 +905,7 @@ namespace hnswlib {
                     element_levels_[i] = 0;
                     linkLists_[i] = nullptr;
                 } else {
-                    element_levels_[i] = linkListSize / size_links_per_element_;
+                    element_levels_[i] = level_from_list_size(linkListSize);
                     linkLists_[i] = (char *) malloc(linkListSize);
                     if (linkLists_[i] == nullptr)
                         throw std::runtime_error("Not enough memory: loadIndex failed to allocate linklist");
@@ -1024,7 +1061,7 @@ namespace hnswlib {
                     }
 
                     // Retrieve neighbours using heuristic and set connections.
-                    getNeighborsByHeuristic2(candidates, layer == 0 ? maxM0_ : maxM_);
+                    getNeighborsByHeuristic2(candidates, get_m(layer));
 
                     {
                         std::unique_lock<std::mutex> lock(link_list_locks_[neigh]);
@@ -1190,11 +1227,11 @@ namespace hnswlib {
                         while (changed) {
                             changed = false;
                             std::unique_lock<std::mutex> lock(link_list_locks_[currObj]);
-                            auto [neighbors, size] = get_neighbors(currObj, level);
+                            auto[neighbors, size] = get_neighbors(currObj, level);
 
                             auto closer = find_closer_neighbor(data_point, curdist, neighbors, size);
                             if (closer.has_value()) {
-                                auto [neighbor, dist] = closer.value();
+                                auto[neighbor, dist] = closer.value();
                                 curdist = dist;
                                 currObj = neighbor;
                                 changed = true;
@@ -1244,6 +1281,19 @@ namespace hnswlib {
             return sum;
         }
 
+        size_t level_from_list_size(size_t list_size) {
+            auto level = 0;
+            if (list_size > 0)
+                list_size--; // For some reason list sizes have an extra byte
+            while (list_size) {
+                list_size -= get_m(level + 1);
+                if (list_size < 0)
+                    throw std::runtime_error("Couldn't retrieve level from list size");
+                level++;
+            }
+            return level;
+        }
+
         void init_list(tableint internal_id, size_t level) {
             if (level == 0)
                 throw std::runtime_error("init_list should only be called for L1 and above");
@@ -1289,10 +1339,14 @@ namespace hnswlib {
             tableint n = std::numeric_limits<tableint>::max();
             for (int i = 0; i < size; i++) {
                 tableint cand = neighbors[i];
-                if (cand < 0)
-                    throw std::runtime_error("cand error - negative");
-                else if (cand > max_elements_)
-                    throw std::runtime_error("cand error - too large");
+                if (cand < 0 || cand > max_elements_) {
+                    std::cerr << "Invalid neighbor found in neighbors list (" << cand <<
+                    ") all neighbors in list: ";
+                    std::copy(neighbors, neighbors + size,
+                              std::ostream_iterator<size_t>(std::cerr, " "));
+                    std::cerr << std::endl;
+                    throw std::runtime_error("cand error");
+                }
                 dist_t d = fstdistfunc_(query_point, getDataByInternalId(cand), dist_func_param_);
 
                 if (d < min_dist) {
@@ -1313,12 +1367,29 @@ namespace hnswlib {
             return std::make_pair((tableint *) data + 1, size);
         };
 
+        bool has_neighbor(tableint internal_id, int level, tableint neighbor) const {
+            auto [data, size] = get_neighbors(internal_id, level);
+            for (int i = 0; i < size; ++i) {
+                if (data[i] == neighbor) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         std::pair<tableint, dist_t> find_closest_neighbor(tableint internal_id, void *query_point, int level) const {
             auto best = std::numeric_limits<dist_t>::max();
             auto[data, size] = get_neighbors(internal_id, level);
+            if (size > get_m(level)) {
+                std::cerr << internal_id << " had too many neighbors (" << size << ") on level " << level << std::endl;
+                throw std::runtime_error("too many neighbors found");
+            }
             auto opt = find_closer_neighbor(query_point, best, data, size);
             if (!opt.has_value()) {
-                throw std::runtime_error("find_closest_neighbor called on a node with no neighbors");
+                std::cerr << "find_closest_neighbor called on a node (" << internal_id
+                          << ") with no neighbors" << std::endl;
+                return std::make_pair(internal_id, best);
+//                throw std::runtime_error("find_closest_neighbor called on a node with no neighbors");
             }
             return opt.value();
         }
