@@ -655,7 +655,12 @@ namespace hnswlib {
                         }
 
                         getNeighborsByHeuristic2(candidates, Mcurmax);
-                        set_neighbors(selectedNeighbors[idx], level, true, candidates);
+                        if (candidates.size() == 0) {
+                        //if (candidates.size() < sz_link_list_other) {
+                            throw std::runtime_error("decreased neighbor list to 0");
+                        } else {
+                            set_neighbors(selectedNeighbors[idx], level, true, candidates);
+                        }
                     }
                 }
             }
@@ -1398,7 +1403,7 @@ namespace hnswlib {
             auto opt = find_closer_neighbor(query_point, best, data, size);
             if (!opt.has_value()) {
                 std::cerr << "find_closest_neighbor called on a node (" << internal_id
-                          << ") with no neighbors" << std::endl;
+                          << ") with no neighbors in level " << level << std::endl;
                 return std::make_pair(internal_id, best);
 //                throw std::runtime_error("find_closest_neighbor called on a node with no neighbors");
             }

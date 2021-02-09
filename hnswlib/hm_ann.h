@@ -79,7 +79,7 @@ namespace hnswlib {
                     if (level_sizes[i - 1] == 0) {
                         if (!flags[i - 1]) {
                             std::cout << "Filled level " << i << std::endl;
-                            this->checkIntegrity();
+//                            this->checkIntegrity();
                             flags[i - 1] = true;
                         }
                         auto[closest, dist] = this->find_closest_neighbor(entry_point, data_point, i);
@@ -101,7 +101,12 @@ namespace hnswlib {
                             for (auto it = vec.begin(); it < vec.end(); it++) {
                                 w.push(*it);
                             }
-                            this->mutuallyConnectNewElement(data_point, v, w, i, true);
+                            entry_point = this->mutuallyConnectNewElement(data_point, v, w, i, true);
+                            auto [ns, sz] = this->get_neighbors(v, i);
+                            if (sz == 0) {
+                                std::cerr << "No neighbors added for " << v << " in level " << i << std::endl;
+                                throw std::runtime_error("No neighbors added");
+                            }
                             //TODO: shrink connections?
                             level_sizes[j - 1]--;
                         }
