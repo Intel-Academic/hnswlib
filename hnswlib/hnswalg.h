@@ -1286,14 +1286,16 @@ namespace hnswlib {
         }
 
         size_t level_from_list_size(size_t list_size) {
+            auto initial_list_size = list_size;
             auto level = 0;
             if (list_size > 0)
                 list_size--; // For some reason list sizes have an extra byte
             while (list_size) {
-                list_size -= get_m(level + 1);
-                if (list_size < 0)
-                    throw std::runtime_error("Couldn't retrieve level from list size");
                 level++;
+                list_size -= get_m(level);
+                list_size--; // for the size byte
+                if (list_size > initial_list_size)
+                    throw std::runtime_error("Couldn't retrieve level from list size");
             }
             return level;
         }

@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <thread>
 #include <atomic>
+#include <set>
 
 namespace hnswlib {
 
@@ -148,12 +149,10 @@ namespace hnswlib {
             return this->M_;
         }
 
-        //TODO: this is copied from HNSW, because I couldn't figure out how to call the template method
-        //from a derived class. Sometime figure out how to do that or otherwise refactor.
         template<bool has_deletions, bool collect_metrics = true>
         std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>,
                 typename HmAnn<dist_t>::CompareByFirst>
-        searchBaseLayerST(tableint ep_id, const void *data_point, size_t ef) const {
+        searchBaseLayerST(tableint ep_id, const void *data_point, size_t ef, size_t level) const {
             VisitedList *vl = this->visited_list_pool_->getFreeVisitedList();
             vl_type *visited_array = vl->mass;
             vl_type visited_array_tag = vl->curV;
@@ -186,7 +185,7 @@ namespace hnswlib {
                 candidate_set.pop();
 
                 tableint current_node_id = current_node_pair.second;
-                int *data = (int *) this->get_linklist0(current_node_id);
+                int *data = (int *) this->get_linklist_at_level(current_node_id, level);
                 size_t size = this->getListCount((linklistsizeint *) data);
 //                bool cur_node_deleted = isMarkedDeleted(current_node_id);
                 if (collect_metrics) {
@@ -252,18 +251,56 @@ namespace hnswlib {
             QueryResult result = {};
             if (this->cur_element_count == 0) return result;
             StopW timer;
-            tableint currObj = this->get_best_entry_point(query_data,
-                                                          2); // Only do this to level 2 instead of 1 unlike HNSW
+            tableint currObj = this->get_best_entry_point(query_data, 1);
+//                                                          2); // Only do this to level 2 instead of 1 unlike HNSW
             result.times.ln_micros = timer.getElapsedTimeMicro();
             timer.reset();
+            //Now process layer 1, prefetching as we go
             std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>,
                     typename HmAnn<dist_t>::CompareByFirst> top_candidates;
+            //TODO: extract this if into a method?
             if (this->has_deletions_) {
                 top_candidates = this->searchBaseLayerST<true, true>(
-                        currObj, query_data, std::max(this->ef_, k));
+                        currObj, query_data, std::max(this->ef_, k), 1);
             } else {
                 top_candidates = this->searchBaseLayerST<false, true>(
-                        currObj, query_data, std::max(this->ef_, k));
+                        currObj, query_data, std::max(this->ef_, k), 1);
+            }
+
+            //Now use the results from layer 1 as entry points for a multithreaded ef 1 search of L0
+            std::vector<tableint> starts;
+            starts.reserve(top_candidates.size());
+            while(!top_candidates.empty()) {
+                tableint item = top_candidates.top().second;
+                starts.push_back(item);
+                top_candidates.pop();
+            }
+            std::unordered_set<tableint> unique_nodes;
+#pragma omp parallel for
+            for (int i = 0; i < starts.size(); ++i) {
+                auto ep = starts[i];
+                std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>,
+                        typename HmAnn<dist_t>::CompareByFirst> candidates;
+                if (this->has_deletions_) {
+                    candidates = this->searchBaseLayerST<true, true>(
+                            ep, query_data, 20, 0);
+                } else {
+                    candidates = this->searchBaseLayerST<false, true>(
+                            ep, query_data, 20, 0);
+                }
+#pragma omp critical
+                {
+                    while(!candidates.empty()) {
+                        auto res = candidates.top();
+                        // Each search might return duplicates of other searches, we only
+                        // want them in the result list once
+                        if (0 == unique_nodes.count(res.second)) {
+                            unique_nodes.insert(res.second);
+                            top_candidates.push(res);
+                        }
+                        candidates.pop();
+                    }
+                }
             }
 
             while (top_candidates.size() > k) {
