@@ -1358,7 +1358,7 @@ namespace hnswlib {
                 }
             }
             if (n != std::numeric_limits<tableint>::max()) {
-                return std::make_optional(std::make_tuple(n, min_dist));
+                return std::make_optional(std::make_pair(n, min_dist));
             } else {
                 return std::nullopt;
             }
