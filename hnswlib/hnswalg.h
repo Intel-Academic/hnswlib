@@ -16,8 +16,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <chrono>
-#include <tcl.h>
-#include <libcodedirectory.h>
 
 struct Mapping {
     int file;
@@ -676,11 +674,11 @@ namespace hnswlib {
         }
 
 
-        tableint get_best_entry_point(const void *query_data) const {
+        tableint get_best_entry_point(const void *query_data, size_t lowest_level = 1) const {
             tableint currObj = enterpoint_node_;
             dist_t curdist = fstdistfunc_(query_data, getDataByInternalId(enterpoint_node_), dist_func_param_);
 
-            for (size_t level = maxlevel_; level > 0; level--) {
+            for (size_t level = maxlevel_; level >= lowest_level; level--) {
                 bool changed = true;
                 while (changed) {
                     changed = false;
@@ -1309,7 +1307,7 @@ namespace hnswlib {
             memset(linkLists_[internal_id], 0, size);
         };
 
-        QueryResult
+        virtual QueryResult
         searchKnn(const void *query_data, size_t k) const {
 
             QueryResult result = {};
