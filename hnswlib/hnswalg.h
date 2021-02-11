@@ -126,8 +126,8 @@ namespace hnswlib {
             fstdistfunc_ = s->get_dist_func();
             dist_func_param_ = s->get_dist_func_param();
             M_ = M;
-//            maxM_ = M_;
-//            maxM0_ = M_ * 2;
+            L1M_ = M_;
+            L0M_ = M_ * 2;
             ef_construction_ = std::max(ef_construction, M_);
             ef_ = 10;
 
@@ -203,8 +203,8 @@ namespace hnswlib {
 //        size_t size_links_per_element_;
 
         size_t M_;
-//        size_t maxM_;
-//        size_t maxM0_;
+        size_t L1M_;
+        size_t L0M_;
         size_t ef_construction_;
 
         double mult_, revSize_;
@@ -513,7 +513,7 @@ namespace hnswlib {
         void push_neighbor(tableint internal_id, int level, tableint n) {
             if (level > maxlevel_)
                 throw std::runtime_error("Trying to add a neighbor on a non-existent level");
-            auto [data, size] = get_neighbors(internal_id, level);
+            auto[data, size] = get_neighbors(internal_id, level);
 
             if (n == internal_id)
                 throw std::runtime_error("Trying to connect a node to itself");
@@ -561,7 +561,7 @@ namespace hnswlib {
                 data[idx] = n;
             }
             //TODO remove
-            auto [ns, sz] = get_neighbors(internal_id, level);
+            auto[ns, sz] = get_neighbors(internal_id, level);
             if (sz != neighbors.size()) {
                 throw std::runtime_error("set neighbors failed - sizes differ");
             }
@@ -593,7 +593,7 @@ namespace hnswlib {
                 if (data[idx] && !isUpdate)
                     throw std::runtime_error("Possible memory corruption");
 
-                auto [d, n] = selectedNeighbors.top();
+                auto[d, n] = selectedNeighbors.top();
                 if (n == internal_id)
                     throw std::runtime_error("Trying to connect a node to itself");
                 if (level > element_levels_[n])
@@ -605,6 +605,7 @@ namespace hnswlib {
             }
             setListCount(ll_cur, size);
         }
+
         tableint mutuallyConnectNewElement(const void *data_point, tableint cur_c,
                                            std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> &top_candidates,
                                            int level, bool isUpdate) {
@@ -628,7 +629,7 @@ namespace hnswlib {
 
                 std::unique_lock<std::mutex> lock(link_list_locks_[selectedNeighbors[idx]]);
 
-                auto [data, sz_link_list_other] = get_neighbors(selectedNeighbors[idx], level);
+                auto[data, sz_link_list_other] = get_neighbors(selectedNeighbors[idx], level);
 
                 bool is_cur_c_present = has_neighbor(selectedNeighbors[idx], level, cur_c);
 
@@ -655,7 +656,7 @@ namespace hnswlib {
 
                         getNeighborsByHeuristic2(candidates, Mcurmax);
                         if (candidates.size() == 0) {
-                        //if (candidates.size() < sz_link_list_other) {
+                            //if (candidates.size() < sz_link_list_other) {
                             throw std::runtime_error("decreased neighbor list to 0");
                         } else {
                             set_neighbors(selectedNeighbors[idx], level, true, candidates);
@@ -767,9 +768,9 @@ namespace hnswlib {
             writeBinaryPOD(output, offsetData_);
             writeBinaryPOD(output, maxlevel_);
             writeBinaryPOD(output, enterpoint_node_);
-            writeBinaryPOD(output, M_); //Originally maxM_, now just here for compat.
+            writeBinaryPOD(output, L1M_); //Originally maxM_ == M_, now allows HM-ANN to use same index format
 
-            writeBinaryPOD(output, get_m(0)); //Originally maxM0_
+            writeBinaryPOD(output, L0M_); //Originally maxM0_
             writeBinaryPOD(output, M_);
             writeBinaryPOD(output, mult_);
             writeBinaryPOD(output, ef_construction_);
@@ -818,11 +819,8 @@ namespace hnswlib {
             readBinaryPOD(input, maxlevel_);
             readBinaryPOD(input, enterpoint_node_);
 
-            size_t dummy_maxM; //originally maxM_
-            size_t dummy_maxM0; //originally maxM0_
-
-            readBinaryPOD(input, dummy_maxM); // originally maxM_
-            readBinaryPOD(input, dummy_maxM0); //originally maxM_0
+            readBinaryPOD(input, L1M_); // originally maxM_, == M_ in hnsw
+            readBinaryPOD(input, L0M_); //originally maxM_0
             readBinaryPOD(input, M_);
             readBinaryPOD(input, mult_);
             readBinaryPOD(input, ef_construction_);
@@ -1347,7 +1345,7 @@ namespace hnswlib {
                 tableint cand = neighbors[i];
                 if (cand < 0 || cand > max_elements_) {
                     std::cerr << "Invalid neighbor found in neighbors list (" << cand <<
-                    ") all neighbors in list: ";
+                              ") all neighbors in list: ";
                     std::copy(neighbors, neighbors + size,
                               std::ostream_iterator<size_t>(std::cerr, " "));
                     std::cerr << std::endl;
@@ -1380,7 +1378,7 @@ namespace hnswlib {
         bool has_neighbor(tableint internal_id, int level, tableint neighbor) const {
             if (level > maxlevel_)
                 throw std::runtime_error("requested neighbors from a non-existent level");
-            auto [data, size] = get_neighbors(internal_id, level);
+            auto[data, size] = get_neighbors(internal_id, level);
             for (int i = 0; i < size; ++i) {
                 if (data[i] == neighbor) {
                     return true;
@@ -1465,10 +1463,12 @@ namespace hnswlib {
 
         virtual size_t get_m(size_t level) const {
             if (level == 0) {
-                return M_ * 2;
+                return L0M_;
+            } else if (level == 1) {
+                return L1M_;
+            } else {
+                return M_;
             }
-            return M_;
         }
-
     };
 }

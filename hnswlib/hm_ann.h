@@ -41,7 +41,7 @@ namespace hnswlib {
 
     class Prefetcher {
         CacheEntry *cache;
-        std::atomic<tableint> *jump_table;
+        std::atomic<size_t> *jump_table;
         std::queue<Request> requests;
         mutable std::mutex q_mut;
         size_t next;
@@ -54,21 +54,32 @@ namespace hnswlib {
         size_t table_len;
     public:
         Prefetcher(size_t cache_bytes, size_t max_elements, size_t elem_size) :
+        //TODO: make sure using right value for elem_size - should be 128 for sift but looks like 268?
                 data_size(elem_size),
-                cache_len(cache_bytes / elem_size),
+                cache_len(cache_bytes / (elem_size + sizeof(CacheEntry))),
                 table_len(max_elements),
                 run(true) {
-            jump_table = new std::atomic<tableint>[table_len];
+            jump_table = new std::atomic<size_t>[table_len];
             cache = new CacheEntry[cache_len];
+            for (int i = 0; i < cache_len; ++i) {
+                cache[i].data = (void*)new char[elem_size];
+            }
+            std::cout << "Prefetcher has cache for " << cache_len << " elements" << std::endl;
             prefetch_thread = new std::thread([this] { fetch(); });
         }
 
         ~Prefetcher() {
             stop();
             join();
-            std::cout << "Overall prefetcher cache hits: " << hits << " misses: " << misses << " ratio: "
-                      << (static_cast<float>(hits) / static_cast<float>(misses)) << std::endl;
             delete prefetch_thread;
+        }
+
+        void report() {
+            auto h = static_cast<float>(hits);
+            auto m = static_cast<float>(misses);
+            auto total = h + m;
+            std::cout << "Overall prefetcher cache hits: " << hits << " misses: " << misses << " rate: "
+                      << (h/total) << std::endl;
         }
 
         void prefetch(tableint key, void *address) {
@@ -79,7 +90,7 @@ namespace hnswlib {
         void *get(tableint key) {
             //TODO: is this good enough, or do we need more locking?
             auto loc = jump_table[key].load();
-            if (loc != std::numeric_limits<tableint>::max()) {
+            if (loc != std::numeric_limits<size_t>::max()) {
                 CacheEntry &entry = cache[loc];
                 void *ptr = entry.get(key);
                 if (ptr != nullptr) {
@@ -104,13 +115,22 @@ namespace hnswlib {
             while (run) {
                 {
                     std::lock_guard<std::mutex> lock(q_mut);
-                    while (batch.size() < 10 && !requests.empty()) {
+                    while (batch.size() < 100 && !requests.empty()) {
                         auto req = requests.front();
                         batch.push_back(req);
                         requests.pop();
                     }
                 }
                 for (auto req: batch) {
+                    //Check to see if it's already cached
+                    auto check = jump_table[req.key].load();
+                    if (check != std::numeric_limits<size_t>::max()) {
+                        CacheEntry &check_entry = cache[check];
+                        if (check_entry.key.load() == req.key) {
+                            //still in cache
+                            continue;
+                        }
+                    }
                     CacheEntry &entry = cache[next];
                     entry.key = req.key; // Invalidates the cache entry for any previous key
                     memcpy(entry.data, req.data, data_size); // Cache
@@ -123,33 +143,44 @@ namespace hnswlib {
         }
     };
 
+    const size_t CACHE_BYTES =1024 * 1024 * 1024;
+
     template<typename dist_t>
     class HmAnn : public HierarchicalNSW<dist_t> {
+        mutable Prefetcher* prefetcher_;
+
     public:
-        HmAnn(SpaceInterface<dist_t> *s) : HierarchicalNSW<dist_t>(s) {
+        HmAnn(SpaceInterface<dist_t> *s) : HierarchicalNSW<dist_t>(s), prefetcher_(nullptr) {
 
         }
 
         HmAnn(SpaceInterface<dist_t> *s, const std::string &location, bool nmslib = false,
               size_t max_elements = 0, std::string level0_path = "hnswlib.level0") :
-                HierarchicalNSW<dist_t>(s) {
+                HierarchicalNSW<dist_t>(s){
             this->loadIndex(location, s, max_elements, level0_path);
+            prefetcher_ = new Prefetcher(CACHE_BYTES, this->max_elements_, this->data_size_);
         }
 
         HmAnn(SpaceInterface<dist_t> *s, size_t max_elements, size_t M = 16, size_t ef_construction = 200,
               std::string level0_path = "hnswlib.level0",
               size_t random_seed = 100) : HierarchicalNSW<dist_t>(s, max_elements, M,
                                                                   ef_construction, level0_path, random_seed) {
+            prefetcher_ = new Prefetcher(CACHE_BYTES, this->max_elements_, this->size_data_per_element_);
         }
 
-        virtual size_t get_m(size_t level) {
-            if (level < 2) {
-                return this->M_ * 2;
+        template<bool use_prefetch> char* getDataWithPrefetch(tableint internal_id) const {
+            if (use_prefetch) {
+                auto ptr = (char*)prefetcher_->get(internal_id);
+                if (nullptr == ptr) {
+                    ptr = this->getDataByInternalId(internal_id);
+                }
+                return ptr;
+            } else {
+                return this->getDataByInternalId(internal_id);
             }
-            return this->M_;
         }
 
-        template<bool has_deletions, bool collect_metrics = true>
+        template<bool has_deletions, bool collect_metrics = true, bool prefetch = false, bool use_prefetch = false, bool machine_prefetch = true>
         std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>,
                 typename HmAnn<dist_t>::CompareByFirst>
         searchBaseLayerST(tableint ep_id, const void *data_point, size_t ef, size_t level) const {
@@ -164,7 +195,7 @@ namespace hnswlib {
 
             dist_t lowerBound;
             if (!has_deletions || !this->isMarkedDeleted(ep_id)) {
-                dist_t dist = this->fstdistfunc_(data_point, this->getDataByInternalId(ep_id), this->dist_func_param_);
+                dist_t dist = this->fstdistfunc_(data_point, this->getDataWithPrefetch<use_prefetch>(ep_id), this->dist_func_param_);
                 lowerBound = dist;
                 top_candidates.emplace(dist, ep_id);
                 candidate_set.emplace(-dist, ep_id);
@@ -193,6 +224,7 @@ namespace hnswlib {
                     this->metric_distance_computations_l0 += size;
                 }
 
+                if (machine_prefetch) {
 #ifdef USE_SSE
                 _mm_prefetch((char *) (visited_array + *(data + 1)), _MM_HINT_T0);
                 _mm_prefetch((char *) (visited_array + *(data + 1) + 64), _MM_HINT_T0);
@@ -201,31 +233,42 @@ namespace hnswlib {
                         _MM_HINT_T0);
                 _mm_prefetch((char *) (data + 2), _MM_HINT_T0);
 #endif
-
+                }
+                if (prefetch) {
+                    this->prefetcher_->prefetch(current_node_id, this->getDataByInternalId(current_node_id));
+                    for (size_t j = 1; j <= size; j++) {
+                        int candidate_id = *(data + j);
+                        this->prefetcher_->prefetch(candidate_id, this->getDataByInternalId(candidate_id));
+                    }
+                }
                 for (size_t j = 1; j <= size; j++) {
                     int candidate_id = *(data + j);
 //                    if (candidate_id == 0) continue;
+                    if (machine_prefetch) {
 #ifdef USE_SSE
-                    _mm_prefetch((char *) (visited_array + *(data + j + 1)), _MM_HINT_T0);
-                    _mm_prefetch(this->data_level0_memory_ + (*(data + j + 1)) * this->size_data_per_element_ +
-                                 this->offsetData_,
-                                 _MM_HINT_T0);////////////
+                        _mm_prefetch((char *) (visited_array + *(data + j + 1)), _MM_HINT_T0);
+                        _mm_prefetch(this->data_level0_memory_ + (*(data + j + 1)) * this->size_data_per_element_ +
+                                     this->offsetData_,
+                                     _MM_HINT_T0);////////////
 #endif
+                    }
                     if (!(visited_array[candidate_id] == visited_array_tag)) {
 
                         visited_array[candidate_id] = visited_array_tag;
 
-                        char *currObj1 = (this->getDataByInternalId(candidate_id));
+                        char *currObj1 = this->getDataWithPrefetch<use_prefetch>(candidate_id);
                         dist_t dist = this->fstdistfunc_(data_point, currObj1, this->dist_func_param_);
 
                         if (top_candidates.size() < ef || lowerBound > dist) {
                             candidate_set.emplace(-dist, candidate_id);
+                            if (machine_prefetch) {
 #ifdef USE_SSE
-                            _mm_prefetch(this->data_level0_memory_ +
-                                         candidate_set.top().second * this->size_data_per_element_ +
-                                         this->offsetLevel0_,///////////
-                                         _MM_HINT_T0);////////////////////////
+                                _mm_prefetch(this->data_level0_memory_ +
+                                             candidate_set.top().second * this->size_data_per_element_ +
+                                             this->offsetLevel0_,///////////
+                                             _MM_HINT_T0);////////////////////////
 #endif
+                            }
 
                             if (!has_deletions || !this->isMarkedDeleted(candidate_id))
                                 top_candidates.emplace(dist, candidate_id);
@@ -251,8 +294,7 @@ namespace hnswlib {
             QueryResult result = {};
             if (this->cur_element_count == 0) return result;
             StopW timer;
-            tableint currObj = this->get_best_entry_point(query_data, 1);
-//                                                          2); // Only do this to level 2 instead of 1 unlike HNSW
+            tableint currObj = this->get_best_entry_point(query_data, 2);
             result.times.ln_micros = timer.getElapsedTimeMicro();
             timer.reset();
             //Now process layer 1, prefetching as we go
@@ -260,16 +302,21 @@ namespace hnswlib {
                     typename HmAnn<dist_t>::CompareByFirst> top_candidates;
             //TODO: extract this if into a method?
             if (this->has_deletions_) {
-                top_candidates = this->searchBaseLayerST<true, true>(
+                top_candidates = this->searchBaseLayerST<true, true, true, false, false>(
                         currObj, query_data, std::max(this->ef_, k), 1);
             } else {
-                top_candidates = this->searchBaseLayerST<false, true>(
+                top_candidates = this->searchBaseLayerST<false, true, true, false, false>(
                         currObj, query_data, std::max(this->ef_, k), 1);
             }
 
             //Now use the results from layer 1 as entry points for a multithreaded ef 1 search of L0
             std::vector<tableint> starts;
             starts.reserve(top_candidates.size());
+
+//            while (top_candidates.size() > std::max(this->ef_, k)) {
+//                top_candidates.pop();
+//            }
+
             while(!top_candidates.empty()) {
                 tableint item = top_candidates.top().second;
                 starts.push_back(item);
@@ -282,11 +329,11 @@ namespace hnswlib {
                 std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>,
                         typename HmAnn<dist_t>::CompareByFirst> candidates;
                 if (this->has_deletions_) {
-                    candidates = this->searchBaseLayerST<true, true>(
-                            ep, query_data, 20, 0);
+                    candidates = this->searchBaseLayerST<true, true, false, true, false>(
+                            ep, query_data, 2, 0);
                 } else {
-                    candidates = this->searchBaseLayerST<false, true>(
-                            ep, query_data, 20, 0);
+                    candidates = this->searchBaseLayerST<false, true, false, true, false>(
+                            ep, query_data, 2, 0);
                 }
 #pragma omp critical
                 {
@@ -312,6 +359,10 @@ namespace hnswlib {
                 top_candidates.pop();
             }
             result.times.l0_micros = timer.getElapsedTimeMicro();
+            static int calls = 0;
+            calls++;
+            if (calls % 10000 == 0)
+                prefetcher_->report();
             return result;
         }
 
