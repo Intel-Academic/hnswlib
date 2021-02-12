@@ -25,12 +25,12 @@ namespace hnswlib {
     };
 
     struct CacheEntry {
-        std::atomic<tableint> key;
+        tableint key;
         void *data;
 
         CacheEntry() : CacheEntry(std::numeric_limits<tableint>::max(), nullptr) {}
 
-        CacheEntry(tableint key, void *data) : key(std::atomic(key)), data(data) {}
+        CacheEntry(tableint key, void *data) : key(key), data(data) {}
 
         void *get(tableint k) {
             if (k == key)
@@ -41,37 +41,40 @@ namespace hnswlib {
 
     class Prefetcher {
         CacheEntry *cache;
-        std::atomic<size_t> *jump_table;
+        size_t *jump_table;
         std::queue<Request> requests;
         mutable std::mutex q_mut;
         size_t next;
-        std::thread *prefetch_thread;
+        std::vector<std::thread> prefetch_threads;
         std::atomic<bool> run;
         size_t data_size;
         std::atomic<size_t> hits;
         std::atomic<size_t> misses;
         size_t cache_len;
         size_t table_len;
+        size_t threads_len;
     public:
         Prefetcher(size_t cache_bytes, size_t max_elements, size_t elem_size) :
-        //TODO: make sure using right value for elem_size - should be 128 for sift but looks like 268?
                 data_size(elem_size),
                 cache_len(cache_bytes / (elem_size + sizeof(CacheEntry))),
                 table_len(max_elements),
+                threads_len(1),
                 run(true) {
-            jump_table = new std::atomic<size_t>[table_len];
+            jump_table = new size_t[table_len];
             cache = new CacheEntry[cache_len];
             for (int i = 0; i < cache_len; ++i) {
                 cache[i].data = (void*)new char[elem_size];
             }
             std::cout << "Prefetcher has cache for " << cache_len << " elements" << std::endl;
-            prefetch_thread = new std::thread([this] { fetch(); });
+            for (int i = 0; i < threads_len; ++i) {
+                prefetch_threads.push_back(std::thread([this]{fetch();}));
+            }
         }
 
         ~Prefetcher() {
             stop();
             join();
-            delete prefetch_thread;
+//            delete prefetch_thread;
         }
 
         void report() {
@@ -88,8 +91,7 @@ namespace hnswlib {
         }
 
         void *get(tableint key) {
-            //TODO: is this good enough, or do we need more locking?
-            auto loc = jump_table[key].load();
+            auto loc = jump_table[key];
             if (loc != std::numeric_limits<size_t>::max()) {
                 CacheEntry &entry = cache[loc];
                 void *ptr = entry.get(key);
@@ -107,7 +109,9 @@ namespace hnswlib {
         }
 
         void join() {
-            prefetch_thread->join();
+            for (auto &t: prefetch_threads) {
+                t.join();
+            }
         }
 
         void fetch() {
@@ -115,7 +119,7 @@ namespace hnswlib {
             while (run) {
                 {
                     std::lock_guard<std::mutex> lock(q_mut);
-                    while (batch.size() < 100 && !requests.empty()) {
+                    while (batch.size() < 200 && !requests.empty()) {
                         auto req = requests.front();
                         batch.push_back(req);
                         requests.pop();
@@ -123,10 +127,10 @@ namespace hnswlib {
                 }
                 for (auto req: batch) {
                     //Check to see if it's already cached
-                    auto check = jump_table[req.key].load();
+                    auto check = jump_table[req.key];
                     if (check != std::numeric_limits<size_t>::max()) {
                         CacheEntry &check_entry = cache[check];
-                        if (check_entry.key.load() == req.key) {
+                        if (check_entry.get(req.key) != nullptr) {
                             //still in cache
                             continue;
                         }
@@ -302,10 +306,10 @@ namespace hnswlib {
                     typename HmAnn<dist_t>::CompareByFirst> top_candidates;
             //TODO: extract this if into a method?
             if (this->has_deletions_) {
-                top_candidates = this->searchBaseLayerST<true, true, true, false, false>(
+                top_candidates = this->searchBaseLayerST<true, true, true, false, true>(
                         currObj, query_data, std::max(this->ef_, k), 1);
             } else {
-                top_candidates = this->searchBaseLayerST<false, true, true, false, false>(
+                top_candidates = this->searchBaseLayerST<false, true, true, false, true>(
                         currObj, query_data, std::max(this->ef_, k), 1);
             }
 
@@ -329,10 +333,10 @@ namespace hnswlib {
                 std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>,
                         typename HmAnn<dist_t>::CompareByFirst> candidates;
                 if (this->has_deletions_) {
-                    candidates = this->searchBaseLayerST<true, true, false, true, false>(
+                    candidates = this->searchBaseLayerST<true, true, false, true, true>(
                             ep, query_data, 2, 0);
                 } else {
-                    candidates = this->searchBaseLayerST<false, true, false, true, false>(
+                    candidates = this->searchBaseLayerST<false, true, false, true, true>(
                             ep, query_data, 2, 0);
                 }
 #pragma omp critical
