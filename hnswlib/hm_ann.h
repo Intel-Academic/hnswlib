@@ -44,6 +44,7 @@ namespace hnswlib {
         size_t *jump_table;
         std::queue<Request> requests;
         mutable std::mutex q_mut;
+        std::condition_variable cond;
         size_t next;
         std::vector<std::thread> prefetch_threads;
         std::atomic<bool> run;
@@ -86,8 +87,11 @@ namespace hnswlib {
         }
 
         void prefetch(tableint key, void *address) {
-            std::lock_guard<std::mutex> lock(q_mut);
-            requests.push(Request(key, address));
+            {
+                std::lock_guard<std::mutex> lock(q_mut);
+                requests.emplace(key, address);
+            }
+            cond.notify_one();
         }
 
         void *get(tableint key) {
@@ -116,10 +120,14 @@ namespace hnswlib {
 
         void fetch() {
             std::vector<Request> batch;
+            batch.reserve(2000);
             while (run) {
                 {
-                    std::lock_guard<std::mutex> lock(q_mut);
-                    while (batch.size() < 200 && !requests.empty()) {
+                    std::unique_lock<std::mutex> lock(q_mut);
+                    while(requests.empty()) {
+                        cond.wait(lock);
+                    }
+                    while (!requests.empty()) {
                         auto req = requests.front();
                         batch.push_back(req);
                         requests.pop();
@@ -306,10 +314,10 @@ namespace hnswlib {
                     typename HmAnn<dist_t>::CompareByFirst> top_candidates;
             //TODO: extract this if into a method?
             if (this->has_deletions_) {
-                top_candidates = this->searchBaseLayerST<true, true, true, false, true>(
+                top_candidates = this->searchBaseLayerST<true, true, true, true, true>(
                         currObj, query_data, std::max(this->ef_, k), 1);
             } else {
-                top_candidates = this->searchBaseLayerST<false, true, true, false, true>(
+                top_candidates = this->searchBaseLayerST<false, true, true, true, true>(
                         currObj, query_data, std::max(this->ef_, k), 1);
             }
 
@@ -327,7 +335,7 @@ namespace hnswlib {
                 top_candidates.pop();
             }
             std::unordered_set<tableint> unique_nodes;
-#pragma omp parallel for
+#pragma omp parallel for num_threads(4) //TODO make a param for this
             for (int i = 0; i < starts.size(); ++i) {
                 auto ep = starts[i];
                 std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>,
