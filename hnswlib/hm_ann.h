@@ -414,11 +414,9 @@ namespace hnswlib {
             this->maxlevel_ = level_sizes.size();
             this->set_level(entry_point, this->maxlevel_);
             this->enterpoint_node_ = entry_point;
-            auto it = indices.cbegin();
-            it++;
             std::vector flags(level_sizes.size(), false);
 #pragma omp parallel for
-            for (; it < indices.cend(); it++) {
+            for (auto it = indices.cbegin() + 1; it < indices.cend(); it++) {
                 auto v = (*it);
 //                std::cout << "Placing " << v << std::endl;
                 // Take update lock to prevent race conditions on an element with insertion/update at the same time.
