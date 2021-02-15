@@ -413,9 +413,15 @@ namespace hnswlib {
             auto it = indices.cbegin();
             it++;
             std::vector flags(level_sizes.size(), false);
+#pragma omp parallel for
             for (; it < indices.cend(); it++) {
                 auto v = (*it);
 //                std::cout << "Placing " << v << std::endl;
+                // Take update lock to prevent race conditions on an element with insertion/update at the same time.
+                std::unique_lock<std::mutex> lock_el_update(
+                        this->link_list_update_locks_[(v & (this->max_update_element_locks - 1))]);
+                std::unique_lock<std::mutex> lock_el(this->link_list_locks_[v]);
+
                 auto data_point = this->getDataByInternalId(v);
                 entry_point = this->enterpoint_node_;
                 for (auto i = level_sizes.size(); i >= 1; i--) {
