@@ -444,10 +444,10 @@ namespace hnswlib {
                             for (auto it = vec.begin(); it < vec.end(); it++) {
                                 w.push(*it);
                             }
-                            entry_point = this->mutuallyConnectNewElement(data_point, v, w, i, true);
-                            auto[ns, sz] = this->get_neighbors(v, i);
+                            entry_point = this->mutuallyConnectNewElement(data_point, v, w, j, true);
+                            auto[ns, sz] = this->get_neighbors(v, j);
                             if (sz == 0) {
-                                std::cerr << "No neighbors added for " << v << " in level " << i << std::endl;
+                                std::cerr << "No neighbors added for " << v << " in level " << j << std::endl;
                                 throw std::runtime_error("No neighbors added");
                             }
                             //TODO: shrink connections?
