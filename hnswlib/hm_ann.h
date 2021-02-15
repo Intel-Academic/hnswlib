@@ -54,6 +54,7 @@ namespace hnswlib {
         size_t cache_len;
         size_t table_len;
         size_t threads_len;
+        static const size_t NOT_CACHED = std::numeric_limits<size_t>::max();
     public:
         Prefetcher(size_t cache_bytes, size_t max_elements, size_t elem_size) :
                 data_size(elem_size),
@@ -66,7 +67,7 @@ namespace hnswlib {
                 run(true) {
             jump_table = new size_t[table_len];
             for (int i = 0; i < table_len; ++i) {
-                jump_table[i] = std::numeric_limits<size_t>::max();
+                jump_table[i] = NOT_CACHED;
             }
             cache = new CacheEntry[cache_len];
             for (int i = 0; i < cache_len; ++i) {
@@ -103,16 +104,21 @@ namespace hnswlib {
 
         void *get(tableint key) {
             auto loc = jump_table[key];
-            if (loc != std::numeric_limits<size_t>::max()) {
+            void* ptr = nullptr;
+            if (loc != NOT_CACHED) {
                 CacheEntry &entry = cache[loc];
-                void *ptr = entry.get(key);
+                ptr = entry.get(key);
+#define PF_TRACK_CACHE_HIT_RATIO
+#ifdef PF_TRACK_CACHE_HIT_RATIO
                 if (ptr != nullptr) {
                     hits++;
                     return ptr;
                 }
+            } else {
+                misses++;
+#endif
             }
-            misses++;
-            return nullptr;
+            return ptr;
         }
 
         void stop() {
@@ -134,7 +140,8 @@ namespace hnswlib {
                     while(requests.empty()) {
                         cond.wait(lock);
                     }
-                    while (!requests.empty()) {
+                    auto num_its = std::max((size_t)200, 2 * requests.size() / 3);
+                    while (!requests.empty() && batch.size() < num_its) {
                         auto req = requests.front();
                         batch.push_back(req);
                         requests.pop();
@@ -143,11 +150,13 @@ namespace hnswlib {
                 for (auto req: batch) {
                     //Check to see if it's already cached
                     auto check = jump_table[req.key];
-                    if (check != std::numeric_limits<size_t>::max()) {
+                    if (check != NOT_CACHED) {
                         CacheEntry &check_entry = cache[check];
                         if (check_entry.get(req.key) != nullptr) {
                             //still in cache
                             continue;
+                        } else {
+                            jump_table[check_entry.key] = NOT_CACHED;
                         }
                     }
                     CacheEntry &entry = cache[next];
