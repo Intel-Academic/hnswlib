@@ -62,6 +62,9 @@ namespace hnswlib {
                 threads_len(1),
                 run(true) {
             jump_table = new size_t[table_len];
+            for (int i = 0; i < table_len; ++i) {
+                jump_table[i] = std::numeric_limits<size_t>::max();
+            }
             cache = new CacheEntry[cache_len];
             for (int i = 0; i < cache_len; ++i) {
                 cache[i].data = (void*)new char[elem_size];
@@ -75,7 +78,8 @@ namespace hnswlib {
         ~Prefetcher() {
             stop();
             join();
-//            delete prefetch_thread;
+            delete[] cache;
+            delete[] jump_table;
         }
 
         void report() {
