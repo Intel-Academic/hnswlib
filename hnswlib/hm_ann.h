@@ -60,6 +60,9 @@ namespace hnswlib {
                 cache_len(cache_bytes / (elem_size + sizeof(CacheEntry))),
                 table_len(max_elements),
                 threads_len(1),
+                hits(0),
+                misses(0),
+                next(0),
                 run(true) {
             jump_table = new size_t[table_len];
             for (int i = 0; i < table_len; ++i) {
