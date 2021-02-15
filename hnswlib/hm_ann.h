@@ -30,7 +30,7 @@ namespace hnswlib {
 
         CacheEntry() : CacheEntry(std::numeric_limits<tableint>::max(), nullptr) {}
 
-        CacheEntry(tableint key, void *data) : key(key), data(data) {}
+        CacheEntry(tableint key, char *data) : key(key), data(data) {}
 
         void *get(tableint k) {
             if (k == key)
@@ -71,7 +71,7 @@ namespace hnswlib {
             }
             cache = new CacheEntry[cache_len];
             for (int i = 0; i < cache_len; ++i) {
-                cache[i].data = (void*)new char[elem_size];
+                cache[i].data = new char[elem_size];
             }
             std::cout << "Prefetcher has cache for " << cache_len << " elements" << std::endl;
             for (int i = 0; i < threads_len; ++i) {
@@ -82,6 +82,9 @@ namespace hnswlib {
         ~Prefetcher() {
             stop();
             join();
+            for (int i = 0; i < cache_len; ++i) {
+                delete[] cache[i].data;
+            }
             delete[] cache;
             delete[] jump_table;
         }
@@ -108,15 +111,12 @@ namespace hnswlib {
             if (loc != NOT_CACHED) {
                 CacheEntry &entry = cache[loc];
                 ptr = entry.get(key);
-#define PF_TRACK_CACHE_HIT_RATIO
-#ifdef PF_TRACK_CACHE_HIT_RATIO
                 if (ptr != nullptr) {
+                    _mm_prefetch(ptr, _MM_HINT_T0);
                     hits++;
-                    return ptr;
                 }
             } else {
                 misses++;
-#endif
             }
             return ptr;
         }
@@ -171,7 +171,7 @@ namespace hnswlib {
         }
     };
 
-    const size_t CACHE_BYTES =1024 * 1024 * 1024;
+    const size_t CACHE_BYTES = 1024 * 1024 * 1024;
 
     template<typename dist_t>
     class HmAnn : public HierarchicalNSW<dist_t> {
@@ -196,16 +196,14 @@ namespace hnswlib {
             prefetcher_ = new Prefetcher(CACHE_BYTES, this->max_elements_, this->size_data_per_element_);
         }
 
-        template<bool use_prefetch> char* getDataWithPrefetch(tableint internal_id) const {
+        template<bool use_prefetch> inline char* getDataWithPrefetch(tableint internal_id) const {
             if (use_prefetch) {
                 auto ptr = (char*)prefetcher_->get(internal_id);
-                if (nullptr == ptr) {
-                    ptr = this->getDataByInternalId(internal_id);
+                if (nullptr != ptr) {
+                    return ptr;
                 }
-                return ptr;
-            } else {
-                return this->getDataByInternalId(internal_id);
             }
+            return this->getDataByInternalId(internal_id);
         }
 
         template<bool has_deletions, bool collect_metrics = true, bool prefetch = false, bool use_prefetch = false, bool machine_prefetch = true>
@@ -256,10 +254,13 @@ namespace hnswlib {
 #ifdef USE_SSE
                 _mm_prefetch((char *) (visited_array + *(data + 1)), _MM_HINT_T0);
                 _mm_prefetch((char *) (visited_array + *(data + 1) + 64), _MM_HINT_T0);
-                _mm_prefetch(
-                        this->data_level0_memory_ + (*(data + 1)) * this->size_data_per_element_ + this->offsetData_,
-                        _MM_HINT_T0);
-                _mm_prefetch((char *) (data + 2), _MM_HINT_T0);
+                if (!use_prefetch) {
+                    _mm_prefetch(
+                            this->data_level0_memory_ + (*(data + 1)) * this->size_data_per_element_ +
+                            this->offsetData_,
+                            _MM_HINT_T0);
+                    _mm_prefetch((char *) (data + 2), _MM_HINT_T0);
+                }
 #endif
                 }
                 if (prefetch) {
@@ -275,9 +276,11 @@ namespace hnswlib {
                     if (machine_prefetch) {
 #ifdef USE_SSE
                         _mm_prefetch((char *) (visited_array + *(data + j + 1)), _MM_HINT_T0);
-                        _mm_prefetch(this->data_level0_memory_ + (*(data + j + 1)) * this->size_data_per_element_ +
-                                     this->offsetData_,
-                                     _MM_HINT_T0);////////////
+                        if (!use_prefetch) {
+                            _mm_prefetch(this->data_level0_memory_ + (*(data + j + 1)) * this->size_data_per_element_ +
+                                         this->offsetData_,
+                                         _MM_HINT_T0);////////////
+                        }
 #endif
                     }
                     if (!(visited_array[candidate_id] == visited_array_tag)) {
@@ -330,10 +333,10 @@ namespace hnswlib {
                     typename HmAnn<dist_t>::CompareByFirst> top_candidates;
             //TODO: extract this if into a method?
             if (this->has_deletions_) {
-                top_candidates = this->searchBaseLayerST<true, true, true, true, true>(
+                top_candidates = this->searchBaseLayerST<true, true, false, false, true>(
                         currObj, query_data, std::max(this->ef_, k), 1);
             } else {
-                top_candidates = this->searchBaseLayerST<false, true, true, true, true>(
+                top_candidates = this->searchBaseLayerST<false, true, false, false, true>(
                         currObj, query_data, std::max(this->ef_, k), 1);
             }
 
@@ -357,10 +360,10 @@ namespace hnswlib {
                 std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>,
                         typename HmAnn<dist_t>::CompareByFirst> candidates;
                 if (this->has_deletions_) {
-                    candidates = this->searchBaseLayerST<true, true, false, true, true>(
+                    candidates = this->searchBaseLayerST<true, true, false, false, true>(
                             ep, query_data, 2, 0);
                 } else {
-                    candidates = this->searchBaseLayerST<false, true, false, true, true>(
+                    candidates = this->searchBaseLayerST<false, true, false, false, true>(
                             ep, query_data, 2, 0);
                 }
 #pragma omp critical
