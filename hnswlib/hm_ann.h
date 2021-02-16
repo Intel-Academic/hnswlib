@@ -26,13 +26,13 @@ namespace hnswlib {
 
     struct CacheEntry {
         tableint key;
-        void *data;
+        char *data;
 
         CacheEntry() : CacheEntry(std::numeric_limits<tableint>::max(), nullptr) {}
 
         CacheEntry(tableint key, char *data) : key(key), data(data) {}
 
-        void *get(tableint k) {
+        char *get(tableint k) {
             if (k == key)
                 return data;
             return nullptr;
@@ -107,12 +107,14 @@ namespace hnswlib {
 
         void *get(tableint key) {
             auto loc = jump_table[key];
-            void* ptr = nullptr;
+            char* ptr = nullptr;
             if (loc != NOT_CACHED) {
                 CacheEntry &entry = cache[loc];
                 ptr = entry.get(key);
                 if (ptr != nullptr) {
+                    // TODO: adjust to size of data
                     _mm_prefetch(ptr, _MM_HINT_T0);
+                    _mm_prefetch(ptr + 64, _MM_HINT_T0);
                     hits++;
                 }
             } else {
@@ -153,7 +155,8 @@ namespace hnswlib {
                     if (check != NOT_CACHED) {
                         CacheEntry &check_entry = cache[check];
                         if (check_entry.get(req.key) != nullptr) {
-                            //still in cache
+                            //still in cache, freshen it a bit
+                            _mm_prefetch(check_entry.data, _MM_HINT_T1);
                             continue;
                         } else {
                             jump_table[check_entry.key] = NOT_CACHED;
@@ -333,10 +336,10 @@ namespace hnswlib {
                     typename HmAnn<dist_t>::CompareByFirst> top_candidates;
             //TODO: extract this if into a method?
             if (this->has_deletions_) {
-                top_candidates = this->searchBaseLayerST<true, true, false, false, true>(
+                top_candidates = this->searchBaseLayerST<true, true, true, false, true>(
                         currObj, query_data, std::max(this->ef_, k), 1);
             } else {
-                top_candidates = this->searchBaseLayerST<false, true, false, false, true>(
+                top_candidates = this->searchBaseLayerST<false, true, true, false, true>(
                         currObj, query_data, std::max(this->ef_, k), 1);
             }
 
@@ -360,10 +363,10 @@ namespace hnswlib {
                 std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>,
                         typename HmAnn<dist_t>::CompareByFirst> candidates;
                 if (this->has_deletions_) {
-                    candidates = this->searchBaseLayerST<true, true, false, false, true>(
+                    candidates = this->searchBaseLayerST<true, true, false, true, true>(
                             ep, query_data, 2, 0);
                 } else {
-                    candidates = this->searchBaseLayerST<false, true, false, false, true>(
+                    candidates = this->searchBaseLayerST<false, true, false, true, true>(
                             ep, query_data, 2, 0);
                 }
 #pragma omp critical
