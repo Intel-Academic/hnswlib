@@ -12,6 +12,7 @@
 #include <thread>
 #include <atomic>
 #include <set>
+#include <omp.h>
 
 namespace hnswlib {
 
@@ -42,7 +43,9 @@ namespace hnswlib {
     class Prefetcher {
         CacheEntry *cache;
         size_t *jump_table;
-        std::queue<Request> requests;
+        std::atomic<std::vector<Request> *> current;
+        size_t current_idx;
+        std::vector<std::vector<Request>> buffers;
         mutable std::mutex q_mut;
         std::condition_variable cond;
         size_t next;
@@ -60,6 +63,7 @@ namespace hnswlib {
                 data_size(elem_size),
                 cache_len(cache_bytes / (elem_size + sizeof(CacheEntry))),
                 table_len(max_elements),
+                buffers(2),
                 threads_len(1),
                 hits(0),
                 misses(0),
@@ -73,9 +77,14 @@ namespace hnswlib {
             for (int i = 0; i < cache_len; ++i) {
                 cache[i].data = new char[elem_size];
             }
+            for (int i = 0; i < buffers.size(); ++i) {
+                buffers[i].reserve(1000);
+            }
+            current_idx = 0;
+            current.store(&buffers[current_idx]);
             std::cout << "Prefetcher has cache for " << cache_len << " elements" << std::endl;
             for (int i = 0; i < threads_len; ++i) {
-                prefetch_threads.push_back(std::thread([this]{fetch();}));
+                prefetch_threads.push_back(std::thread([this] { fetch(); }));
             }
         }
 
@@ -94,20 +103,21 @@ namespace hnswlib {
             auto m = static_cast<float>(misses);
             auto total = h + m;
             std::cout << "Overall prefetcher cache hits: " << hits << " misses: " << misses << " rate: "
-                      << (h/total) << std::endl;
+                      << (h / total) << std::endl;
         }
 
         void prefetch(tableint key, void *address) {
-            {
-                std::lock_guard<std::mutex> lock(q_mut);
-                requests.emplace(key, address);
+            std::vector<Request> *requests = current.load(std::memory_order_acquire);
+            requests->push_back(Request(key, address));
+            std::vector<Request> *now = current.load(std::memory_order_acquire);
+            if (requests != now) {
+                cond.notify_one();
             }
-            cond.notify_one();
         }
 
         void *get(tableint key) {
             auto loc = jump_table[key];
-            char* ptr = nullptr;
+            char *ptr = nullptr;
             if (loc != NOT_CACHED) {
                 CacheEntry &entry = cache[loc];
                 ptr = entry.get(key);
@@ -134,42 +144,37 @@ namespace hnswlib {
         }
 
         void fetch() {
-            std::vector<Request> batch;
-            batch.reserve(2000);
             while (run) {
                 {
                     std::unique_lock<std::mutex> lock(q_mut);
-                    while(requests.empty()) {
-                        cond.wait(lock);
-                    }
-                    auto num_its = std::max((size_t)200, 2 * requests.size() / 3);
-                    while (!requests.empty() && batch.size() < num_its) {
-                        auto req = requests.front();
-                        batch.push_back(req);
-                        requests.pop();
-                    }
-                }
-                for (auto req: batch) {
-                    //Check to see if it's already cached
-                    auto check = jump_table[req.key];
-                    if (check != NOT_CACHED) {
-                        CacheEntry &check_entry = cache[check];
-                        if (check_entry.get(req.key) != nullptr) {
-                            //still in cache, freshen it a bit
-                            _mm_prefetch(check_entry.data, _MM_HINT_T1);
-                            continue;
-                        } else {
-                            jump_table[check_entry.key] = NOT_CACHED;
+                    auto last = current_idx;
+                    current_idx++;
+                    current_idx %= buffers.size();
+                    current.store(&buffers[current_idx]);
+                    cond.wait(lock);
+                    auto batch = buffers[last];
+                    for (auto req: batch) {
+                        //Check to see if it's already cached
+                        auto check = jump_table[req.key];
+                        if (check != NOT_CACHED) {
+                            CacheEntry &check_entry = cache[check];
+                            if (check_entry.get(req.key) != nullptr) {
+                                //still in cache, freshen it a bit
+                                _mm_prefetch(check_entry.data, _MM_HINT_T1);
+                                continue;
+                            } else {
+                                jump_table[check_entry.key] = NOT_CACHED;
+                            }
                         }
+                        CacheEntry &entry = cache[next];
+                        entry.key = req.key; // Invalidates the cache entry for any previous key
+                        memcpy(entry.data, req.data, data_size); // Cache
+                        jump_table[req.key] = next; // Now we can find the cache
+                        next++; // Move the insertion point forward
+                        next = next % cache_len; // or maybe wrap around
                     }
-                    CacheEntry &entry = cache[next];
-                    entry.key = req.key; // Invalidates the cache entry for any previous key
-                    memcpy(entry.data, req.data, data_size); // Cache
-                    jump_table[req.key] = next; // Now we can find the cache
-                    next++; // Move the insertion point forward
-                    next = next % cache_len; // or maybe wrap around
+                    batch.clear();
                 }
-                batch.clear();
             }
         }
     };
@@ -178,7 +183,7 @@ namespace hnswlib {
 
     template<typename dist_t>
     class HmAnn : public HierarchicalNSW<dist_t> {
-        mutable Prefetcher* prefetcher_;
+        mutable Prefetcher *prefetcher_;
 
     public:
         HmAnn(SpaceInterface<dist_t> *s) : HierarchicalNSW<dist_t>(s), prefetcher_(nullptr) {
@@ -187,7 +192,7 @@ namespace hnswlib {
 
         HmAnn(SpaceInterface<dist_t> *s, const std::string &location, bool nmslib = false,
               size_t max_elements = 0, std::string level0_path = "hnswlib.level0") :
-                HierarchicalNSW<dist_t>(s){
+                HierarchicalNSW<dist_t>(s) {
             this->loadIndex(location, s, max_elements, level0_path);
             prefetcher_ = new Prefetcher(CACHE_BYTES, this->max_elements_, this->data_size_);
         }
@@ -199,9 +204,10 @@ namespace hnswlib {
             prefetcher_ = new Prefetcher(CACHE_BYTES, this->max_elements_, this->size_data_per_element_);
         }
 
-        template<bool use_prefetch> inline char* getDataWithPrefetch(tableint internal_id) const {
+        template<bool use_prefetch>
+        inline char *getDataWithPrefetch(tableint internal_id) const {
             if (use_prefetch) {
-                auto ptr = (char*)prefetcher_->get(internal_id);
+                auto ptr = (char *) prefetcher_->get(internal_id);
                 if (nullptr != ptr) {
                     return ptr;
                 }
@@ -224,7 +230,8 @@ namespace hnswlib {
 
             dist_t lowerBound;
             if (!has_deletions || !this->isMarkedDeleted(ep_id)) {
-                dist_t dist = this->fstdistfunc_(data_point, this->getDataWithPrefetch<use_prefetch>(ep_id), this->dist_func_param_);
+                dist_t dist = this->fstdistfunc_(data_point, this->getDataWithPrefetch<use_prefetch>(ep_id),
+                                                 this->dist_func_param_);
                 lowerBound = dist;
                 top_candidates.emplace(dist, ep_id);
                 candidate_set.emplace(-dist, ep_id);
@@ -255,15 +262,15 @@ namespace hnswlib {
 
                 if (machine_prefetch) {
 #ifdef USE_SSE
-                _mm_prefetch((char *) (visited_array + *(data + 1)), _MM_HINT_T0);
-                _mm_prefetch((char *) (visited_array + *(data + 1) + 64), _MM_HINT_T0);
-                if (!use_prefetch) {
-                    _mm_prefetch(
-                            this->data_level0_memory_ + (*(data + 1)) * this->size_data_per_element_ +
-                            this->offsetData_,
-                            _MM_HINT_T0);
-                    _mm_prefetch((char *) (data + 2), _MM_HINT_T0);
-                }
+                    _mm_prefetch((char *) (visited_array + *(data + 1)), _MM_HINT_T0);
+                    _mm_prefetch((char *) (visited_array + *(data + 1) + 64), _MM_HINT_T0);
+                    if (!use_prefetch) {
+                        _mm_prefetch(
+                                this->data_level0_memory_ + (*(data + 1)) * this->size_data_per_element_ +
+                                this->offsetData_,
+                                _MM_HINT_T0);
+                        _mm_prefetch((char *) (data + 2), _MM_HINT_T0);
+                    }
 #endif
                 }
                 if (prefetch) {
@@ -351,39 +358,39 @@ namespace hnswlib {
 //                top_candidates.pop();
 //            }
 
-            while(!top_candidates.empty()) {
+            const size_t L0_THREADS = 4;
+            while (!top_candidates.empty()) {
                 tableint item = top_candidates.top().second;
                 starts.push_back(item);
                 top_candidates.pop();
             }
             std::unordered_set<tableint> unique_nodes;
-#pragma omp parallel for num_threads(4) //TODO make a param for this
+            std::vector<std::vector<std::pair<dist_t, tableint>>> results(L0_THREADS);
+#pragma omp parallel for num_threads(L0_THREADS)
             for (int i = 0; i < starts.size(); ++i) {
+                auto id = omp_get_thread_num();
                 auto ep = starts[i];
                 std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>,
                         typename HmAnn<dist_t>::CompareByFirst> candidates;
                 if (this->has_deletions_) {
                     candidates = this->searchBaseLayerST<true, true, false, true, true>(
-                            ep, query_data, 2, 0);
+                            ep, query_data, 1, 0);
                 } else {
                     candidates = this->searchBaseLayerST<false, true, false, true, true>(
-                            ep, query_data, 2, 0);
+                            ep, query_data, 1, 0);
                 }
-#pragma omp critical
-                {
-                    while(!candidates.empty()) {
-                        auto res = candidates.top();
-                        // Each search might return duplicates of other searches, we only
-                        // want them in the result list once
-                        if (0 == unique_nodes.count(res.second)) {
-                            unique_nodes.insert(res.second);
-                            top_candidates.push(res);
-                        }
-                        candidates.pop();
-                    }
+                while (!candidates.empty()) {
+                    auto res = candidates.top();
+                    results[id].push_back(res);
+                    candidates.pop();
                 }
             }
 
+            for (int i = 0; i < results.size(); ++i) {
+                for (int j = 0; j < results[i].size(); ++j) {
+                    top_candidates.push(results[i][j]);
+                }
+            }
             while (top_candidates.size() > k) {
                 top_candidates.pop();
             }
