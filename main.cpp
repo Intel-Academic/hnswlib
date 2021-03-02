@@ -1,4 +1,3 @@
-#define HNSW_MMAP
 
 #include <string>
 #include <algorithm>

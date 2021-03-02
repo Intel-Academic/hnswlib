@@ -2,7 +2,7 @@
 #include <fstream>
 #include <queue>
 
-#define HNSW_MMAP
+//#define HNSW_MMAP
 
 #include "hnswlib/hm_ann.h"
 
