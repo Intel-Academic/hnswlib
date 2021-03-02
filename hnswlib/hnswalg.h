@@ -17,7 +17,7 @@
 #include <unistd.h>
 #include <chrono>
 #include <iterator>
-#include "ittnotify.h"
+#include <ittnotify.h>
 
 struct Mapping {
     int file;

@@ -3,9 +3,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 project (hnsw_lib)
 
-include_directories("${PROJECT_BINARY_DIR}")
-
-
+include_directories("${PROJECT_BINARY_DIR}" /opt/intel/oneapi/vtune/latest/include/)
+link_directories(/opt/intel/oneapi/vtune/latest/lib64)
 
 set(SOURCE_EXE main.cpp)           
 
@@ -18,7 +17,7 @@ add_executable(main ${SOURCE_EXE})
 if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
   SET( CMAKE_CXX_FLAGS  "-Ofast -DNDEBUG -openmp -march=native -fpic -pthread -ftree-vectorize")
 elseif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-SET( CMAKE_CXX_FLAGS  "-Ofast -lrt -DNDEBUG -openmp -march=native -fpic -w -fopenmp -ftree-vectorize -ftree-vectorizer-verbose=0" )
+SET( CMAKE_CXX_FLAGS  "-Ofast -lrt -lpthread -DNDEBUG -openmp -march=native -fpic -w -fopenmp -ftree-vectorize -ftree-vectorizer-verbose=0" )
 elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
   SET( CMAKE_CXX_FLAGS  "-Ofast -lrt -DNDEBUG -openmp -march=native -fpic -w -fopenmp -ftree-vectorize" )
 endif()
@@ -27,4 +26,4 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++20")
 
 add_executable(test_updates examples/updates_test.cpp)
 
-target_link_libraries(main sift_test) 
+target_link_libraries(main sift_test ittnotify "${CMAKE_DL_LIBS}")

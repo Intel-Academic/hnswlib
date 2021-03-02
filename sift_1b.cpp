@@ -46,6 +46,9 @@ using namespace hnswlib;
 #error "Cannot define getPeakRSS( ) or getCurrentRSS( ) for an unknown OS."
 #endif
 
+__itt_domain* domain = __itt_domain_create("sift_app");
+__itt_string_handle* handle_load_index = __itt_string_handle_create("load_index");
+__itt_string_handle* handle_query = __itt_string_handle_create("query");
 
 /**
 * Returns the peak (maximum so far) resident set size (physical
@@ -173,7 +176,9 @@ test_approx(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_queries
     for (int i = 0; i < n_queries; i++) {
 	size_t offset = permutation[i];
         StopW query_time;
+        __itt_task_begin(domain, __itt_null, __itt_null, handle_query);
         QueryResult result = appr_alg.searchKnn(massQ + vecdim * offset, k);
+        __itt_task_end(domain);
 	result.times.total_micros = query_time.getElapsedTimeMicro();
 	results.times.push_back(result.times);
         std::priority_queue<std::pair<int, labeltype >> gt(answers[permutation[i]]);
