@@ -2,7 +2,7 @@
 #include <fstream>
 #include <queue>
 
-//#define HNSW_MMAP
+#define HNSW_MMAP
 
 #include "hnswlib/hm_ann.h"
 
@@ -316,6 +316,12 @@ inline bool exists_test(const std::string &name) {
     return f.good();
 }
 
+std::string sift_index_name(size_t subset_millions, size_t ef_construction, size_t M) {
+    std::ostringstream prefix;
+    prefix << "sift1b_" << subset_millions << "m";
+    auto p = prefix.str();
+    return index_name(p, ef_construction, M);
+}
 
 void sift_test1B(
         std::string &algorithm,
@@ -337,13 +343,11 @@ void sift_test1B(
     size_t vecsize = subset_size_milllions * 1000000;
 
     size_t vecdim = 128;
-    char path_index[1024];
-    char path_l0[1024];
+    auto path_index = sift_index_name(subset_size_milllions, efConstruction, M);
+    auto path_l0 = level0_name(path_index);
     //char path_gt[1024];
     //char *path_q = "bigann/bigann_query.bvecs";
     char *path_data = "bigann/bigann_base.bvecs";
-    sprintf(path_index, "sift1b_%dm_ef_%d_M_%d.bin", subset_size_milllions, efConstruction, M);
-    sprintf(path_l0, "sift1b_%dm_ef_%d_M_%d.level0", subset_size_milllions, efConstruction, M);
 
     //sprintf(path_gt, "bigann/gnd/idx_%dM.ivecs", subset_size_milllions);
 

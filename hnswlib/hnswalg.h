@@ -1,1475 +1,1664 @@
 #pragma once
 
-#include "visited_list_pool.h"
 #include "hnswlib.h"
-#include <atomic>
-#include <random>
-#include <stdlib.h>
+#include "visited_list_pool.h"
 #include <assert.h>
-#include <unordered_set>
-#include <list>
-#include <sys/mman.h>
-#include <string>
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include <sys/stat.h>
 #include <fcntl.h>
-#include <unistd.h>
-#include <chrono>
 #include <iterator>
 #include <ittnotify.h>
+#include <list>
+#include <random>
+#include <sstream>
+#include <stdlib.h>
+#include <string>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <unordered_set>
+#include <filesystem>
+
+std::string index_name(std::string &prefix, size_t ef_construction, size_t M) {
+  std::ostringstream result;
+  result << prefix << "_ef_" << ef_construction << "_M_" << M << ".bin";
+  return result.str();
+}
+
+std::string level0_name(const std::string &index_name) {
+  std::string name(index_name);
+  auto binpos = name.find(".bin");
+  std::string level0(".level0");
+  if (binpos != std::string::npos) {
+    name.replace(binpos, 4, level0);
+  } else {
+    name += level0;
+  }
+  return name;
+}
 
 struct Mapping {
-    int file;
-    char *mapping;
-    size_t size;
+  int file;
+  char *mapping;
+  size_t size;
 };
 
-
 class StopW {
-    std::chrono::steady_clock::time_point time_begin;
+  std::chrono::steady_clock::time_point time_begin;
+
 public:
-    StopW() {
-        time_begin = std::chrono::steady_clock::now();
-    }
+  StopW() { time_begin = std::chrono::steady_clock::now(); }
 
-    float getElapsedTimeMicro() {
-        std::chrono::steady_clock::time_point time_end = std::chrono::steady_clock::now();
-        return (std::chrono::duration_cast<std::chrono::microseconds>(time_end - time_begin).count());
-    }
+  float getElapsedTimeMicro() {
+    std::chrono::steady_clock::time_point time_end =
+        std::chrono::steady_clock::now();
+    return (std::chrono::duration_cast<std::chrono::microseconds>(time_end -
+                                                                  time_begin)
+                .count());
+  }
 
-    void reset() {
-        time_begin = std::chrono::steady_clock::now();
-    }
-
+  void reset() { time_begin = std::chrono::steady_clock::now(); }
 };
 
 namespace hnswlib {
-    typedef unsigned int tableint;
-    typedef unsigned int linklistsizeint;
+typedef unsigned int tableint;
+typedef unsigned int linklistsizeint;
 
-    void unmap_file(Mapping map) {
-        munmap(map.mapping, map.size);
-        close(map.file);
+void unmap_file(Mapping map) {
+  munmap(map.mapping, map.size);
+  close(map.file);
+}
+
+Mapping map_file(const char *path, size_t size, bool create) {
+  using namespace std;
+  int desc;
+  if (create) {
+    cout << "Creating " << path << endl;
+    desc = open(path, O_RDWR | O_CREAT | O_TRUNC, (mode_t)0600);
+    if (desc == -1) {
+      throw std::runtime_error("Couldn't open mmap file");
     }
-
-    Mapping map_file(const char *path, size_t size, bool create) {
-        using namespace std;
-        int desc;
-        if (create) {
-            cout << "Creating " << path << endl;
-            desc = open(path, O_RDWR | O_CREAT | O_TRUNC, (mode_t) 0600);
-            if (desc == -1) {
-                throw std::runtime_error("Couldn't open mmap file");
-            }
-            int result = lseek(desc, size - 1, SEEK_SET);
-            if (result == -1) {
-                close(desc);
-                throw std::runtime_error("Couldn't resize mmap file");
-            }
-            result = write(desc, "", 1);
-            if (result != 1) {
-                close(desc);
-                throw std::runtime_error("Error writing last byte of the file");
-            }
-        } else {
-            cout << "Mapping existing " << path << endl;
-            desc = open(path, O_RDWR, (mode_t) 0600);
-        }
-        size_t file_size = lseek(desc, 0, SEEK_END);
-        if (file_size != size) {
-            cout << "File size is " << file_size << ", expected " << size << endl;
-            close(desc);
-            throw std::runtime_error("mmap file size is wrong");
-        }
-        lseek(desc, 0, SEEK_SET);
-        //char buf[0x100];
-        //snprintf(buf, sizeof buf, "pmap -x %u", (unsigned)getpid());
-        //system(buf);
-        //system("ulimit -m -v");
-        const auto map = (char *) mmap(nullptr, size,
-                                       PROT_READ | PROT_WRITE, MAP_NORESERVE | MAP_SHARED, desc, 0);
-        //system(buf);
-        if (map == nullptr || map == MAP_FAILED) {
-            close(desc);
-            throw std::runtime_error("Couldn't map file");
-        }
-        Mapping m;
-        m.file = desc;
-        m.mapping = map;
-        m.size = size;
-        return m;
+    int result = lseek(desc, size - 1, SEEK_SET);
+    if (result == -1) {
+      close(desc);
+      throw std::runtime_error("Couldn't resize mmap file");
     }
+    result = write(desc, "", 1);
+    if (result != 1) {
+      close(desc);
+      throw std::runtime_error("Error writing last byte of the file");
+    }
+  } else {
+    cout << "Mapping existing " << path << endl;
+    desc = open(path, O_RDWR, (mode_t)0600);
+  }
+  size_t file_size = lseek(desc, 0, SEEK_END);
+  if (file_size != size) {
+    cout << "File size is " << file_size << ", expected " << size << endl;
+    close(desc);
+    throw std::runtime_error("mmap file size is wrong");
+  }
+  lseek(desc, 0, SEEK_SET);
+  // char buf[0x100];
+  // snprintf(buf, sizeof buf, "pmap -x %u", (unsigned)getpid());
+  // system(buf);
+  // system("ulimit -m -v");
+  const auto map = (char *)mmap(nullptr, size, PROT_READ | PROT_WRITE,
+                                MAP_NORESERVE | MAP_SHARED, desc, 0);
+  // system(buf);
+  if (map == nullptr || map == MAP_FAILED) {
+    close(desc);
+    throw std::runtime_error("Couldn't map file");
+  }
+  Mapping m;
+  m.file = desc;
+  m.mapping = map;
+  m.size = size;
+  return m;
+}
 
-    template<typename dist_t>
-    class HierarchicalNSW : public AlgorithmInterface<dist_t> {
-    public:
-        static const tableint max_update_element_locks = 65536;
+template <typename dist_t>
+class HierarchicalNSW : public AlgorithmInterface<dist_t> {
+public:
+  static const tableint max_update_element_locks = 65536;
 
-        HierarchicalNSW(SpaceInterface<dist_t> *s) {
+  HierarchicalNSW(SpaceInterface<dist_t> *s) {}
 
-        }
+  HierarchicalNSW(SpaceInterface<dist_t> *s, const std::string &location,
+                  bool nmslib = false, size_t max_elements = 0,
+                  std::string level0_path = "hnswlib.level0") {
+    loadIndex(location, s, max_elements, level0_path);
+  }
 
-        HierarchicalNSW(SpaceInterface<dist_t> *s, const std::string &location, bool nmslib = false,
-                        size_t max_elements = 0, std::string level0_path = "hnswlib.level0") {
-            loadIndex(location, s, max_elements, level0_path);
-        }
+  HierarchicalNSW(SpaceInterface<dist_t> *s, size_t max_elements, size_t M = 16,
+                  size_t ef_construction = 200,
+                  std::string level0_path = "hnswlib.level0",
+                  size_t random_seed = 100)
+      : link_list_locks_(max_elements),
+        link_list_update_locks_(max_update_element_locks),
+        element_levels_(max_elements) {
+    max_elements_ = max_elements;
 
-        HierarchicalNSW(SpaceInterface<dist_t> *s, size_t max_elements, size_t M = 16, size_t ef_construction = 200,
-                        std::string level0_path = "hnswlib.level0",
-                        size_t random_seed = 100) :
-                link_list_locks_(max_elements), link_list_update_locks_(max_update_element_locks),
-                element_levels_(max_elements) {
-            max_elements_ = max_elements;
+    has_deletions_ = false;
+    data_size_ = s->get_data_size();
+    fstdistfunc_ = s->get_dist_func();
+    dist_func_param_ = s->get_dist_func_param();
+    M_ = M;
+    L1M_ = M_;
+    L0M_ = M_ * 2;
+    ef_construction_ = std::max(ef_construction, M_);
+    ef_ = 10;
 
-            has_deletions_ = false;
-            data_size_ = s->get_data_size();
-            fstdistfunc_ = s->get_dist_func();
-            dist_func_param_ = s->get_dist_func_param();
-            M_ = M;
-            L1M_ = M_;
-            L0M_ = M_ * 2;
-            ef_construction_ = std::max(ef_construction, M_);
-            ef_ = 10;
+    level_generator_.seed(random_seed);
+    update_probability_generator_.seed(random_seed + 1);
 
-            level_generator_.seed(random_seed);
-            update_probability_generator_.seed(random_seed + 1);
+    size_links_level0_ = get_m(0) * sizeof(tableint) + sizeof(linklistsizeint);
+    size_data_per_element_ =
+        size_links_level0_ + data_size_ + sizeof(labeltype);
+    offsetData_ = size_links_level0_;
+    label_offset_ = size_links_level0_ + data_size_;
+    offsetLevel0_ = 0;
 
-            size_links_level0_ = get_m(0) * sizeof(tableint) + sizeof(linklistsizeint);
-            size_data_per_element_ = size_links_level0_ + data_size_ + sizeof(labeltype);
-            offsetData_ = size_links_level0_;
-            label_offset_ = size_links_level0_ + data_size_;
-            offsetLevel0_ = 0;
-
-            auto l0_size = max_elements_ * size_data_per_element_;
+    auto l0_size = max_elements_ * size_data_per_element_;
 #ifdef HNSW_MMAP
 
-            auto l0_path = level0_path.c_str();
-            level0_mapping_ = map_file(l0_path, l0_size, true);
-            data_level0_memory_ = level0_mapping_.mapping;
+    auto l0_path = level0_path.c_str();
+    level0_mapping_ = map_file(l0_path, l0_size, true);
+    data_level0_memory_ = level0_mapping_.mapping;
 #else
-            data_level0_memory_ = (char *) malloc(l0_size);
+    data_level0_memory_ = (char *)malloc(l0_size);
 #endif
-            cur_element_count = 0;
+    cur_element_count = 0;
 
-            visited_list_pool_ = new VisitedListPool(1, max_elements);
+    visited_list_pool_ = new VisitedListPool(1, max_elements);
 
+    // initializations for special treatment of the first node
+    enterpoint_node_ = -1;
+    maxlevel_ = -1;
 
+    init_lists();
+    //            size_links_per_element_ = maxM_ * sizeof(tableint) +
+    //            sizeof(linklistsizeint);
+    mult_ = 1 / log(1.0 * M_);
+    revSize_ = 1.0 / mult_;
+  }
 
-            //initializations for special treatment of the first node
-            enterpoint_node_ = -1;
-            maxlevel_ = -1;
+  void init_lists() {
+    linkLists_ = (char **)malloc(sizeof(void *) * max_elements_);
+    if (linkLists_ == nullptr)
+      throw std::runtime_error(
+          "Not enough memory: failed to allocate linklists");
+    memset(linkLists_, 0, sizeof(void *) * max_elements_);
+  }
 
-            init_lists();
-//            size_links_per_element_ = maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
-            mult_ = 1 / log(1.0 * M_);
-            revSize_ = 1.0 / mult_;
-        }
+  struct CompareByFirst {
+    constexpr bool
+    operator()(std::pair<dist_t, tableint> const &a,
+               std::pair<dist_t, tableint> const &b) const noexcept {
+      return a.first < b.first;
+    }
+  };
 
-        void init_lists() {
-            linkLists_ = (char **) malloc(sizeof(void *) * max_elements_);
-            if (linkLists_ == nullptr)
-                throw std::runtime_error("Not enough memory: failed to allocate linklists");
-            memset(linkLists_, 0, sizeof(void *) * max_elements_);
-        }
-
-        struct CompareByFirst {
-            constexpr bool operator()(std::pair<dist_t, tableint> const &a,
-                                      std::pair<dist_t, tableint> const &b) const noexcept {
-                return a.first < b.first;
-            }
-        };
-
-        ~HierarchicalNSW() {
+  ~HierarchicalNSW() {
 #ifdef HNSW_MMAP
-            unmap_file(level0_mapping_);
+    unmap_file(level0_mapping_);
 #else
-            free(data_level0_memory_);
+    free(data_level0_memory_);
 #endif
-            free_lists();
-            delete visited_list_pool_;
-        }
+    free_lists();
+    delete visited_list_pool_;
+  }
 
-        void free_lists() {
-            for (tableint i = 0; i < cur_element_count; i++) {
-                if (element_levels_[i] > 0)
-                    free(linkLists_[i]);
-            }
-            free(linkLists_);
-        }
+  void free_lists() {
+    for (tableint i = 0; i < cur_element_count; i++) {
+      if (element_levels_[i] > 0)
+        free(linkLists_[i]);
+    }
+    free(linkLists_);
+  }
 
-        size_t max_elements_;
-        size_t cur_element_count;
-        size_t size_data_per_element_;
-//        size_t size_links_per_element_;
+  size_t max_elements_;
+  size_t cur_element_count;
+  size_t size_data_per_element_;
+  //        size_t size_links_per_element_;
 
-        size_t M_;
-        size_t L1M_;
-        size_t L0M_;
-        size_t ef_construction_;
+  size_t M_;
+  size_t L1M_;
+  size_t L0M_;
+  size_t ef_construction_;
 
-        double mult_, revSize_;
-        int maxlevel_;
+  double mult_, revSize_;
+  int maxlevel_;
 
+  VisitedListPool *visited_list_pool_;
+  std::mutex cur_element_count_guard_;
 
-        VisitedListPool *visited_list_pool_;
-        std::mutex cur_element_count_guard_;
+  std::vector<std::mutex> link_list_locks_;
 
-        std::vector<std::mutex> link_list_locks_;
+  // Locks to prevent race condition during update/insert of an element at same
+  // time. Note: Locks for additions can also be used to prevent this race
+  // condition if the querying of KNN is not exposed along with update/inserts
+  // i.e multithread insert/update/query in parallel.
+  std::vector<std::mutex> link_list_update_locks_;
+  tableint enterpoint_node_;
 
-        // Locks to prevent race condition during update/insert of an element at same time.
-        // Note: Locks for additions can also be used to prevent this race condition if the querying of KNN is not exposed along with update/inserts i.e multithread insert/update/query in parallel.
-        std::vector<std::mutex> link_list_update_locks_;
-        tableint enterpoint_node_;
+  size_t size_links_level0_;
+  size_t offsetData_, offsetLevel0_;
 
+  Mapping level0_mapping_;
+  char *data_level0_memory_;
+  char **linkLists_;
+  std::vector<int> element_levels_;
 
-        size_t size_links_level0_;
-        size_t offsetData_, offsetLevel0_;
+  size_t data_size_;
 
-        Mapping level0_mapping_;
-        char *data_level0_memory_;
-        char **linkLists_;
-        std::vector<int> element_levels_;
+  bool has_deletions_;
 
-        size_t data_size_;
+  size_t label_offset_;
+  DISTFUNC<dist_t> fstdistfunc_;
+  void *dist_func_param_;
+  std::unordered_map<labeltype, tableint> label_lookup_;
 
-        bool has_deletions_;
+  std::default_random_engine level_generator_;
+  std::default_random_engine update_probability_generator_;
 
+  inline labeltype getExternalLabel(tableint internal_id) const {
+    labeltype return_label;
+    memcpy(&return_label,
+           (data_level0_memory_ + internal_id * size_data_per_element_ +
+            label_offset_),
+           sizeof(labeltype));
+    return return_label;
+  }
 
-        size_t label_offset_;
-        DISTFUNC<dist_t> fstdistfunc_;
-        void *dist_func_param_;
-        std::unordered_map<labeltype, tableint> label_lookup_;
+  inline void setExternalLabel(tableint internal_id, labeltype label) const {
+    memcpy((data_level0_memory_ + internal_id * size_data_per_element_ +
+            label_offset_),
+           &label, sizeof(labeltype));
+  }
 
-        std::default_random_engine level_generator_;
-        std::default_random_engine update_probability_generator_;
+  inline labeltype *getExternalLabeLp(tableint internal_id) const {
+    return (labeltype *)(data_level0_memory_ +
+                         internal_id * size_data_per_element_ + label_offset_);
+  }
 
-        inline labeltype getExternalLabel(tableint internal_id) const {
-            labeltype return_label;
-            memcpy(&return_label, (data_level0_memory_ + internal_id * size_data_per_element_ + label_offset_),
-                   sizeof(labeltype));
-            return return_label;
-        }
+  inline char *getDataByInternalId(tableint internal_id) const {
+    return (data_level0_memory_ + internal_id * size_data_per_element_ +
+            offsetData_);
+  }
 
-        inline void setExternalLabel(tableint internal_id, labeltype label) const {
-            memcpy((data_level0_memory_ + internal_id * size_data_per_element_ + label_offset_), &label,
-                   sizeof(labeltype));
-        }
+  int getRandomLevel(double reverse_size) {
+    std::uniform_real_distribution<double> distribution(0.0, 1.0);
+    double r = -log(distribution(level_generator_)) * reverse_size;
+    return (int)r;
+  }
 
-        inline labeltype *getExternalLabeLp(tableint internal_id) const {
-            return (labeltype *) (data_level0_memory_ + internal_id * size_data_per_element_ + label_offset_);
-        }
+  std::priority_queue<std::pair<dist_t, tableint>,
+                      std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
+  searchBaseLayer(tableint ep_id, const void *data_point, int layer) {
+    VisitedList *vl = visited_list_pool_->getFreeVisitedList();
+    vl_type *visited_array = vl->mass;
+    vl_type visited_array_tag = vl->curV;
 
-        inline char *getDataByInternalId(tableint internal_id) const {
-            return (data_level0_memory_ + internal_id * size_data_per_element_ + offsetData_);
-        }
+    std::priority_queue<std::pair<dist_t, tableint>,
+                        std::vector<std::pair<dist_t, tableint>>,
+                        CompareByFirst>
+        top_candidates;
+    std::priority_queue<std::pair<dist_t, tableint>,
+                        std::vector<std::pair<dist_t, tableint>>,
+                        CompareByFirst>
+        candidateSet;
 
-        int getRandomLevel(double reverse_size) {
-            std::uniform_real_distribution<double> distribution(0.0, 1.0);
-            double r = -log(distribution(level_generator_)) * reverse_size;
-            return (int) r;
-        }
+    dist_t lowerBound;
+    if (!isMarkedDeleted(ep_id)) {
+      dist_t dist = fstdistfunc_(data_point, getDataByInternalId(ep_id),
+                                 dist_func_param_);
+      top_candidates.emplace(dist, ep_id);
+      lowerBound = dist;
+      candidateSet.emplace(-dist, ep_id);
+    } else {
+      lowerBound = std::numeric_limits<dist_t>::max();
+      candidateSet.emplace(-lowerBound, ep_id);
+    }
+    visited_array[ep_id] = visited_array_tag;
 
+    while (!candidateSet.empty()) {
+      std::pair<dist_t, tableint> curr_el_pair = candidateSet.top();
+      if ((-curr_el_pair.first) > lowerBound) {
+        break;
+      }
+      candidateSet.pop();
 
-        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
-        searchBaseLayer(tableint ep_id, const void *data_point, int layer) {
-            VisitedList *vl = visited_list_pool_->getFreeVisitedList();
-            vl_type *visited_array = vl->mass;
-            vl_type visited_array_tag = vl->curV;
+      tableint curNodeNum = curr_el_pair.second;
 
-            std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
-            std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> candidateSet;
+      std::unique_lock<std::mutex> lock(link_list_locks_[curNodeNum]);
 
-            dist_t lowerBound;
-            if (!isMarkedDeleted(ep_id)) {
-                dist_t dist = fstdistfunc_(data_point, getDataByInternalId(ep_id), dist_func_param_);
-                top_candidates.emplace(dist, ep_id);
-                lowerBound = dist;
-                candidateSet.emplace(-dist, ep_id);
-            } else {
-                lowerBound = std::numeric_limits<dist_t>::max();
-                candidateSet.emplace(-lowerBound, ep_id);
-            }
-            visited_array[ep_id] = visited_array_tag;
-
-            while (!candidateSet.empty()) {
-                std::pair<dist_t, tableint> curr_el_pair = candidateSet.top();
-                if ((-curr_el_pair.first) > lowerBound) {
-                    break;
-                }
-                candidateSet.pop();
-
-                tableint curNodeNum = curr_el_pair.second;
-
-                std::unique_lock<std::mutex> lock(link_list_locks_[curNodeNum]);
-
-                auto[datal, size] = get_neighbors(curNodeNum, layer);
+      auto [datal, size] = get_neighbors(curNodeNum, layer);
 #ifdef USE_SSE
-                _mm_prefetch((char *) (visited_array + *(datal)), _MM_HINT_T0);
-                _mm_prefetch((char *) (visited_array + *(datal) + 64), _MM_HINT_T0);
-                _mm_prefetch(getDataByInternalId(*datal), _MM_HINT_T0);
-                _mm_prefetch(getDataByInternalId(*(datal + 1)), _MM_HINT_T0);
+      _mm_prefetch((char *)(visited_array + *(datal)), _MM_HINT_T0);
+      _mm_prefetch((char *)(visited_array + *(datal) + 64), _MM_HINT_T0);
+      _mm_prefetch(getDataByInternalId(*datal), _MM_HINT_T0);
+      _mm_prefetch(getDataByInternalId(*(datal + 1)), _MM_HINT_T0);
 
-                for (size_t j = 0; j < size; j++) {
-                    _mm_prefetch((char *) (visited_array + *(datal + j + 1)), _MM_HINT_T0);
-                    _mm_prefetch(getDataByInternalId(*(datal + j + 1)), _MM_HINT_T0);
-                }
+      for (size_t j = 0; j < size; j++) {
+        _mm_prefetch((char *)(visited_array + *(datal + j + 1)), _MM_HINT_T0);
+        _mm_prefetch(getDataByInternalId(*(datal + j + 1)), _MM_HINT_T0);
+      }
 #endif
 
-                for (size_t j = 0; j < size; j++) {
-                    tableint candidate_id = *(datal + j);
-                    if (visited_array[candidate_id] == visited_array_tag) continue;
-                    visited_array[candidate_id] = visited_array_tag;
-                    char *currObj1 = (getDataByInternalId(candidate_id));
+      for (size_t j = 0; j < size; j++) {
+        tableint candidate_id = *(datal + j);
+        if (visited_array[candidate_id] == visited_array_tag)
+          continue;
+        visited_array[candidate_id] = visited_array_tag;
+        char *currObj1 = (getDataByInternalId(candidate_id));
 
-                    dist_t dist1 = fstdistfunc_(data_point, currObj1, dist_func_param_);
-                    if (top_candidates.size() < ef_construction_ || lowerBound > dist1) {
-                        candidateSet.emplace(-dist1, candidate_id);
+        dist_t dist1 = fstdistfunc_(data_point, currObj1, dist_func_param_);
+        if (top_candidates.size() < ef_construction_ || lowerBound > dist1) {
+          candidateSet.emplace(-dist1, candidate_id);
 #ifdef USE_SSE
-                        _mm_prefetch(getDataByInternalId(candidateSet.top().second), _MM_HINT_T0);
+          _mm_prefetch(getDataByInternalId(candidateSet.top().second),
+                       _MM_HINT_T0);
 #endif
 
-                        if (!isMarkedDeleted(candidate_id))
-                            top_candidates.emplace(dist1, candidate_id);
+          if (!isMarkedDeleted(candidate_id))
+            top_candidates.emplace(dist1, candidate_id);
 
-                        if (top_candidates.size() > ef_construction_)
-                            top_candidates.pop();
+          if (top_candidates.size() > ef_construction_)
+            top_candidates.pop();
 
-                        if (!top_candidates.empty())
-                            lowerBound = top_candidates.top().first;
-                    }
-                }
-            }
-            visited_list_pool_->releaseVisitedList(vl);
-
-            return top_candidates;
+          if (!top_candidates.empty())
+            lowerBound = top_candidates.top().first;
         }
+      }
+    }
+    visited_list_pool_->releaseVisitedList(vl);
 
-        mutable std::atomic<long> metric_distance_computations_l0;
-        mutable std::atomic<long> metric_distance_computations_hier;
-        mutable std::atomic<long> metric_hops_hier;
-        mutable std::atomic<long> metric_hops_l0;
+    return top_candidates;
+  }
 
-        template<bool has_deletions, bool collect_metrics = true>
-        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
-        searchBaseLayerST(tableint ep_id, const void *data_point, size_t ef) const {
-            VisitedList *vl = visited_list_pool_->getFreeVisitedList();
-            vl_type *visited_array = vl->mass;
-            vl_type visited_array_tag = vl->curV;
+  mutable std::atomic<long> metric_distance_computations_l0;
+  mutable std::atomic<long> metric_distance_computations_hier;
+  mutable std::atomic<long> metric_hops_hier;
+  mutable std::atomic<long> metric_hops_l0;
 
-            std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
-            std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> candidate_set;
+  template <bool has_deletions, bool collect_metrics = true>
+  std::priority_queue<std::pair<dist_t, tableint>,
+                      std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
+  searchBaseLayerST(tableint ep_id, const void *data_point, size_t ef) const {
+    VisitedList *vl = visited_list_pool_->getFreeVisitedList();
+    vl_type *visited_array = vl->mass;
+    vl_type visited_array_tag = vl->curV;
 
-            dist_t lowerBound;
-            if (!has_deletions || !isMarkedDeleted(ep_id)) {
-                dist_t dist = fstdistfunc_(data_point, getDataByInternalId(ep_id), dist_func_param_);
-                lowerBound = dist;
-                top_candidates.emplace(dist, ep_id);
-                candidate_set.emplace(-dist, ep_id);
-            } else {
-                lowerBound = std::numeric_limits<dist_t>::max();
-                candidate_set.emplace(-lowerBound, ep_id);
-            }
+    std::priority_queue<std::pair<dist_t, tableint>,
+                        std::vector<std::pair<dist_t, tableint>>,
+                        CompareByFirst>
+        top_candidates;
+    std::priority_queue<std::pair<dist_t, tableint>,
+                        std::vector<std::pair<dist_t, tableint>>,
+                        CompareByFirst>
+        candidate_set;
 
-            visited_array[ep_id] = visited_array_tag;
+    dist_t lowerBound;
+    if (!has_deletions || !isMarkedDeleted(ep_id)) {
+      dist_t dist = fstdistfunc_(data_point, getDataByInternalId(ep_id),
+                                 dist_func_param_);
+      lowerBound = dist;
+      top_candidates.emplace(dist, ep_id);
+      candidate_set.emplace(-dist, ep_id);
+    } else {
+      lowerBound = std::numeric_limits<dist_t>::max();
+      candidate_set.emplace(-lowerBound, ep_id);
+    }
 
-            while (!candidate_set.empty()) {
+    visited_array[ep_id] = visited_array_tag;
 
-                std::pair<dist_t, tableint> current_node_pair = candidate_set.top();
+    while (!candidate_set.empty()) {
 
-                if ((-current_node_pair.first) > lowerBound) {
-                    break;
-                }
-                candidate_set.pop();
+      std::pair<dist_t, tableint> current_node_pair = candidate_set.top();
 
-                tableint current_node_id = current_node_pair.second;
-                int *data = (int *) get_linklist0(current_node_id);
-                size_t size = getListCount((linklistsizeint *) data);
-//                bool cur_node_deleted = isMarkedDeleted(current_node_id);
-                if (collect_metrics) {
-                    metric_hops_l0++;
-                    metric_distance_computations_l0 += size;
-                }
+      if ((-current_node_pair.first) > lowerBound) {
+        break;
+      }
+      candidate_set.pop();
+
+      tableint current_node_id = current_node_pair.second;
+      int *data = (int *)get_linklist0(current_node_id);
+      size_t size = getListCount((linklistsizeint *)data);
+      //                bool cur_node_deleted =
+      //                isMarkedDeleted(current_node_id);
+      if (collect_metrics) {
+        metric_hops_l0++;
+        metric_distance_computations_l0 += size;
+      }
 
 #ifdef USE_SSE
-                _mm_prefetch((char *) (visited_array + *(data + 1)), _MM_HINT_T0);
-                _mm_prefetch((char *) (visited_array + *(data + 1) + 64), _MM_HINT_T0);
-                _mm_prefetch(data_level0_memory_ + (*(data + 1)) * size_data_per_element_ + offsetData_, _MM_HINT_T0);
-                _mm_prefetch((char *) (data + 2), _MM_HINT_T0);
+      _mm_prefetch((char *)(visited_array + *(data + 1)), _MM_HINT_T0);
+      _mm_prefetch((char *)(visited_array + *(data + 1) + 64), _MM_HINT_T0);
+      _mm_prefetch(data_level0_memory_ +
+                       (*(data + 1)) * size_data_per_element_ + offsetData_,
+                   _MM_HINT_T0);
+      _mm_prefetch((char *)(data + 2), _MM_HINT_T0);
 #endif
 
-                for (size_t j = 1; j <= size; j++) {
-                    int candidate_id = *(data + j);
+      for (size_t j = 1; j <= size; j++) {
+        int candidate_id = *(data + j);
 //                    if (candidate_id == 0) continue;
 #ifdef USE_SSE
-                    _mm_prefetch((char *) (visited_array + *(data + j + 1)), _MM_HINT_T0);
-                    _mm_prefetch(data_level0_memory_ + (*(data + j + 1)) * size_data_per_element_ + offsetData_,
-                                 _MM_HINT_T0);////////////
+        _mm_prefetch((char *)(visited_array + *(data + j + 1)), _MM_HINT_T0);
+        _mm_prefetch(data_level0_memory_ +
+                         (*(data + j + 1)) * size_data_per_element_ +
+                         offsetData_,
+                     _MM_HINT_T0); ////////////
 #endif
-                    if (!(visited_array[candidate_id] == visited_array_tag)) {
+        if (!(visited_array[candidate_id] == visited_array_tag)) {
 
-                        visited_array[candidate_id] = visited_array_tag;
+          visited_array[candidate_id] = visited_array_tag;
 
-                        char *currObj1 = (getDataByInternalId(candidate_id));
-                        dist_t dist = fstdistfunc_(data_point, currObj1, dist_func_param_);
+          char *currObj1 = (getDataByInternalId(candidate_id));
+          dist_t dist = fstdistfunc_(data_point, currObj1, dist_func_param_);
 
-                        if (top_candidates.size() < ef || lowerBound > dist) {
-                            candidate_set.emplace(-dist, candidate_id);
+          if (top_candidates.size() < ef || lowerBound > dist) {
+            candidate_set.emplace(-dist, candidate_id);
 #ifdef USE_SSE
-                            _mm_prefetch(data_level0_memory_ + candidate_set.top().second * size_data_per_element_ +
-                                         offsetLevel0_,///////////
-                                         _MM_HINT_T0);////////////////////////
+            _mm_prefetch(data_level0_memory_ +
+                             candidate_set.top().second *
+                                 size_data_per_element_ +
+                             offsetLevel0_, ///////////
+                         _MM_HINT_T0);      ////////////////////////
 #endif
 
-                            if (!has_deletions || !isMarkedDeleted(candidate_id))
-                                top_candidates.emplace(dist, candidate_id);
+            if (!has_deletions || !isMarkedDeleted(candidate_id))
+              top_candidates.emplace(dist, candidate_id);
 
-                            if (top_candidates.size() > ef)
-                                top_candidates.pop();
+            if (top_candidates.size() > ef)
+              top_candidates.pop();
 
-                            if (!top_candidates.empty())
-                                lowerBound = top_candidates.top().first;
-                        }
-                    }
-                }
-            }
-
-            visited_list_pool_->releaseVisitedList(vl);
-            return top_candidates;
+            if (!top_candidates.empty())
+              lowerBound = top_candidates.top().first;
+          }
         }
+      }
+    }
 
-        void getNeighborsByHeuristic2(
-                std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> &top_candidates,
-                const size_t M) {
-            if (top_candidates.size() < M) {
-                return;
-            }
+    visited_list_pool_->releaseVisitedList(vl);
+    return top_candidates;
+  }
 
-            std::priority_queue<std::pair<dist_t, tableint>> queue_closest;
-            std::vector<std::pair<dist_t, tableint>> return_list;
-            while (top_candidates.size() > 0) {
-                queue_closest.emplace(-top_candidates.top().first, top_candidates.top().second);
-                top_candidates.pop();
-            }
+  void getNeighborsByHeuristic2(
+      std::priority_queue<std::pair<dist_t, tableint>,
+                          std::vector<std::pair<dist_t, tableint>>,
+                          CompareByFirst> &top_candidates,
+      const size_t M) {
+    if (top_candidates.size() < M) {
+      return;
+    }
 
-            while (queue_closest.size()) {
-                if (return_list.size() >= M)
-                    break;
-                std::pair<dist_t, tableint> curent_pair = queue_closest.top();
-                dist_t dist_to_query = -curent_pair.first;
-                queue_closest.pop();
-                bool good = true;
+    std::priority_queue<std::pair<dist_t, tableint>> queue_closest;
+    std::vector<std::pair<dist_t, tableint>> return_list;
+    while (top_candidates.size() > 0) {
+      queue_closest.emplace(-top_candidates.top().first,
+                            top_candidates.top().second);
+      top_candidates.pop();
+    }
 
-                for (std::pair<dist_t, tableint> second_pair : return_list) {
-                    dist_t curdist =
-                            fstdistfunc_(getDataByInternalId(second_pair.second),
-                                         getDataByInternalId(curent_pair.second),
-                                         dist_func_param_);;
-                    if (curdist < dist_to_query) {
-                        good = false;
-                        break;
-                    }
-                }
-                if (good) {
-                    return_list.push_back(curent_pair);
-                }
-            }
+    while (queue_closest.size()) {
+      if (return_list.size() >= M)
+        break;
+      std::pair<dist_t, tableint> curent_pair = queue_closest.top();
+      dist_t dist_to_query = -curent_pair.first;
+      queue_closest.pop();
+      bool good = true;
 
-            for (std::pair<dist_t, tableint> curent_pair : return_list) {
-                top_candidates.emplace(-curent_pair.first, curent_pair.second);
-            }
+      for (std::pair<dist_t, tableint> second_pair : return_list) {
+        dist_t curdist = fstdistfunc_(getDataByInternalId(second_pair.second),
+                                      getDataByInternalId(curent_pair.second),
+                                      dist_func_param_);
+        ;
+        if (curdist < dist_to_query) {
+          good = false;
+          break;
         }
+      }
+      if (good) {
+        return_list.push_back(curent_pair);
+      }
+    }
 
+    for (std::pair<dist_t, tableint> curent_pair : return_list) {
+      top_candidates.emplace(-curent_pair.first, curent_pair.second);
+    }
+  }
 
-        linklistsizeint *get_linklist0(tableint internal_id) const {
-            return (linklistsizeint *) (data_level0_memory_ + internal_id * size_data_per_element_ + offsetLevel0_);
-        };
+  linklistsizeint *get_linklist0(tableint internal_id) const {
+    return (linklistsizeint *)(data_level0_memory_ +
+                               internal_id * size_data_per_element_ +
+                               offsetLevel0_);
+  };
 
-        linklistsizeint *get_linklist0(tableint internal_id, char *data_level0_memory_) const {
-            return (linklistsizeint *) (data_level0_memory_ + internal_id * size_data_per_element_ + offsetLevel0_);
-        };
+  linklistsizeint *get_linklist0(tableint internal_id,
+                                 char *data_level0_memory_) const {
+    return (linklistsizeint *)(data_level0_memory_ +
+                               internal_id * size_data_per_element_ +
+                               offsetLevel0_);
+  };
 
-        linklistsizeint *get_linklist(tableint internal_id, int level) const {
-            return (linklistsizeint *) (linkLists_[internal_id] + list_size(level - 1) - 1);
-        };
+  linklistsizeint *get_linklist(tableint internal_id, int level) const {
+    return (linklistsizeint *)(linkLists_[internal_id] + list_size(level - 1) -
+                               1);
+  };
 
-        linklistsizeint *get_linklist_at_level(tableint internal_id, int level) const {
-            return level == 0 ? get_linklist0(internal_id) : get_linklist(internal_id, level);
-        };
+  linklistsizeint *get_linklist_at_level(tableint internal_id,
+                                         int level) const {
+    return level == 0 ? get_linklist0(internal_id)
+                      : get_linklist(internal_id, level);
+  };
 
-        // Sets element_levels_[id], and clears existing
-        //hierarchy, if any. Does not modify L0.
-        void set_level(tableint internal_id, int level) {
-            element_levels_[internal_id] = level;
-            if (nullptr != linkLists_[internal_id]) {
-                free(linkLists_[internal_id]);
-            }
-            if (level > 0) {
-                init_list(internal_id, level);
-            } else {
-                linkLists_[internal_id] = nullptr;
-            }
+  // Sets element_levels_[id], and clears existing
+  // hierarchy, if any. Does not modify L0.
+  void set_level(tableint internal_id, int level) {
+    element_levels_[internal_id] = level;
+    if (nullptr != linkLists_[internal_id]) {
+      free(linkLists_[internal_id]);
+    }
+    if (level > 0) {
+      init_list(internal_id, level);
+    } else {
+      linkLists_[internal_id] = nullptr;
+    }
+  }
+
+  void push_neighbor(tableint internal_id, int level, tableint n) {
+    if (level > maxlevel_)
+      throw std::runtime_error(
+          "Trying to add a neighbor on a non-existent level");
+    auto [data, size] = get_neighbors(internal_id, level);
+
+    if (n == internal_id)
+      throw std::runtime_error("Trying to connect a node to itself");
+    if (level > element_levels_[n])
+      throw std::runtime_error("Trying to make a link on a non-existent level");
+    if (n > cur_element_count)
+      throw std::runtime_error("Trying to set invalid neighbor (too high)");
+    if (size >= get_m(level)) {
+      throw std::runtime_error("Trying to add too many neighbors");
+    }
+    data[size] = n;
+    setListCount(get_linklist_at_level(internal_id, level), size + 1);
+  }
+
+  void set_neighbors(tableint internal_id, int level, bool isUpdate,
+                     const std::vector<tableint> &neighbors) {
+    if (level > maxlevel_)
+      throw std::runtime_error("requested neighbors from a non-existent level");
+    //            std::cout << "setting neighbors for " << internal_id <<
+    //            std::endl;
+    linklistsizeint *ll_cur = get_linklist_at_level(internal_id, level);
+
+    if (*ll_cur && !isUpdate) {
+      std::cerr << "Setting neighbors, but existing neighbors were found: ";
+      std::copy(ll_cur + 1, ll_cur + 1 + getListCount(ll_cur),
+                std::ostream_iterator<size_t>(std::cerr, " "));
+      std::cerr << std::endl;
+      throw std::runtime_error(
+          "The newly inserted element should have blank link list");
+    }
+    if (neighbors.size() > get_m(level)) {
+      throw std::runtime_error(
+          "neighbors vector longer than M for selected level");
+    }
+    setListCount(ll_cur, neighbors.size());
+    auto data = (tableint *)(ll_cur + 1);
+    for (size_t idx = 0; idx < neighbors.size(); idx++) {
+      if (data[idx] && !isUpdate)
+        throw std::runtime_error("Possible memory corruption");
+
+      auto n = neighbors[idx];
+      if (n == internal_id)
+        throw std::runtime_error("Trying to connect a node to itself");
+      if (level > element_levels_[n])
+        throw std::runtime_error(
+            "Trying to make a link on a non-existent level");
+      if (n > cur_element_count)
+        throw std::runtime_error("Trying to set invalid neighbor (too high)");
+      data[idx] = n;
+    }
+    // TODO remove
+    auto [ns, sz] = get_neighbors(internal_id, level);
+    if (sz != neighbors.size()) {
+      throw std::runtime_error("set neighbors failed - sizes differ");
+    }
+    for (int i = 0; i < sz; ++i) {
+      if (neighbors[i] != ns[i]) {
+        throw std::runtime_error("didn't set neighbors correctly");
+      }
+    }
+  }
+
+  template <typename C>
+  void set_neighbors(tableint internal_id, int level, bool isUpdate,
+                     std::priority_queue<std::pair<dist_t, tableint>, C,
+                                         CompareByFirst> &selectedNeighbors) {
+    linklistsizeint *ll_cur = get_linklist_at_level(internal_id, level);
+
+    if (*ll_cur && !isUpdate) {
+      std::cerr << "Setting neighbors, but existing neighbors were found: ";
+      std::copy(ll_cur + 1, ll_cur + 1 + getListCount(ll_cur),
+                std::ostream_iterator<size_t>(std::cerr, " "));
+      std::cerr << std::endl;
+      throw std::runtime_error(
+          "The newly inserted element should have blank link list");
+    }
+    auto size = selectedNeighbors.size();
+    if (size > get_m(level)) {
+      throw std::runtime_error(
+          "neighbors vector longer than M for selected level");
+    }
+    auto data = (tableint *)(ll_cur + 1);
+    for (int idx = 0; idx < size; ++idx) {
+      if (data[idx] && !isUpdate)
+        throw std::runtime_error("Possible memory corruption");
+
+      auto [d, n] = selectedNeighbors.top();
+      if (n == internal_id)
+        throw std::runtime_error("Trying to connect a node to itself");
+      if (level > element_levels_[n])
+        throw std::runtime_error(
+            "Trying to make a link on a non-existent level");
+      if (n > cur_element_count)
+        throw std::runtime_error("Trying to set invalid neighbor (too high)");
+      data[idx] = n;
+      selectedNeighbors.pop();
+    }
+    setListCount(ll_cur, size);
+  }
+
+  tableint mutuallyConnectNewElement(
+      const void *data_point, tableint cur_c,
+      std::priority_queue<std::pair<dist_t, tableint>,
+                          std::vector<std::pair<dist_t, tableint>>,
+                          CompareByFirst> &top_candidates,
+      int level, bool isUpdate) {
+    size_t Mcurmax = get_m(level);
+    getNeighborsByHeuristic2(top_candidates, M_);
+    if (top_candidates.size() > M_)
+      throw std::runtime_error(
+          "Should be not be more than M_ candidates returned by the heuristic");
+
+    std::vector<tableint> selectedNeighbors;
+    selectedNeighbors.reserve(M_);
+    while (top_candidates.size() > 0) {
+      selectedNeighbors.push_back(top_candidates.top().second);
+      top_candidates.pop();
+    }
+
+    tableint next_closest_entry_point = selectedNeighbors[0];
+
+    set_neighbors(cur_c, level, isUpdate, selectedNeighbors);
+
+    for (size_t idx = 0; idx < selectedNeighbors.size(); idx++) {
+
+      std::unique_lock<std::mutex> lock(
+          link_list_locks_[selectedNeighbors[idx]]);
+
+      auto [data, sz_link_list_other] =
+          get_neighbors(selectedNeighbors[idx], level);
+
+      bool is_cur_c_present =
+          has_neighbor(selectedNeighbors[idx], level, cur_c);
+
+      // If cur_c is already present in the neighboring connections of
+      // `selectedNeighbors[idx]` then no need to modify any connections or run
+      // the heuristics.
+      if (!is_cur_c_present) {
+        if (sz_link_list_other < Mcurmax) {
+          push_neighbor(selectedNeighbors[idx], level, cur_c);
+        } else {
+          auto selected = getDataByInternalId(selectedNeighbors[idx]);
+          // finding the "weakest" element to replace it with the new one
+          dist_t d_max = fstdistfunc_(getDataByInternalId(cur_c), selected,
+                                      dist_func_param_);
+          // Heuristic:
+          std::priority_queue<std::pair<dist_t, tableint>,
+                              std::vector<std::pair<dist_t, tableint>>,
+                              CompareByFirst>
+              candidates;
+          candidates.emplace(d_max, cur_c);
+
+          for (size_t j = 0; j < sz_link_list_other; j++) {
+            candidates.emplace(fstdistfunc_(getDataByInternalId(data[j]),
+                                            selected, dist_func_param_),
+                               data[j]);
+          }
+
+          getNeighborsByHeuristic2(candidates, Mcurmax);
+          if (candidates.size() == 0) {
+            // if (candidates.size() < sz_link_list_other) {
+            throw std::runtime_error("decreased neighbor list to 0");
+          } else {
+            set_neighbors(selectedNeighbors[idx], level, true, candidates);
+          }
         }
+      }
+    }
 
-        void push_neighbor(tableint internal_id, int level, tableint n) {
-            if (level > maxlevel_)
-                throw std::runtime_error("Trying to add a neighbor on a non-existent level");
-            auto[data, size] = get_neighbors(internal_id, level);
+    return next_closest_entry_point;
+  }
 
-            if (n == internal_id)
-                throw std::runtime_error("Trying to connect a node to itself");
-            if (level > element_levels_[n])
-                throw std::runtime_error("Trying to make a link on a non-existent level");
-            if (n > cur_element_count)
-                throw std::runtime_error("Trying to set invalid neighbor (too high)");
-            if (size >= get_m(level)) {
-                throw std::runtime_error("Trying to add too many neighbors");
-            }
-            data[size] = n;
-            setListCount(get_linklist_at_level(internal_id, level), size + 1);
+  std::mutex global;
+  size_t ef_;
+
+  void setEf(size_t ef) { ef_ = ef; }
+
+  tableint get_best_entry_point(const void *query_data,
+                                size_t lowest_level = 1) const {
+    tableint currObj = enterpoint_node_;
+    dist_t curdist = fstdistfunc_(
+        query_data, getDataByInternalId(enterpoint_node_), dist_func_param_);
+
+    for (size_t level = maxlevel_; level >= lowest_level; level--) {
+      bool changed = true;
+      while (changed) {
+        changed = false;
+        auto [neighbors, size] = get_neighbors(currObj, level);
+        auto closer =
+            find_closer_neighbor(query_data, curdist, neighbors, size);
+        if (closer.has_value()) {
+          metric_hops_hier++;
+          metric_distance_computations_hier += size;
+          auto [closer_id, closer_dist] = closer.value();
+          curdist = closer_dist;
+          currObj = closer_id;
+          changed = true;
         }
+      }
+    }
+    return currObj;
+  }
 
-        void
-        set_neighbors(tableint internal_id, int level, bool isUpdate, const std::vector<tableint> &neighbors) {
-            if (level > maxlevel_)
-                throw std::runtime_error("requested neighbors from a non-existent level");
-//            std::cout << "setting neighbors for " << internal_id << std::endl;
-            linklistsizeint *ll_cur = get_linklist_at_level(internal_id, level);
+  std::priority_queue<std::pair<dist_t, tableint>>
+  searchKnnInternal(void *query_data, int k) {
+    std::priority_queue<std::pair<dist_t, tableint>> top_candidates;
+    if (cur_element_count == 0)
+      return top_candidates;
+    tableint currObj = get_best_entry_point(query_data);
 
-            if (*ll_cur && !isUpdate) {
-                std::cerr << "Setting neighbors, but existing neighbors were found: ";
-                std::copy(ll_cur + 1, ll_cur + 1 + getListCount(ll_cur),
-                          std::ostream_iterator<size_t>(std::cerr, " "));
-                std::cerr << std::endl;
-                throw std::runtime_error("The newly inserted element should have blank link list");
-            }
-            if (neighbors.size() > get_m(level)) {
-                throw std::runtime_error("neighbors vector longer than M for selected level");
-            }
-            setListCount(ll_cur, neighbors.size());
-            auto data = (tableint *) (ll_cur + 1);
-            for (size_t idx = 0; idx < neighbors.size(); idx++) {
-                if (data[idx] && !isUpdate)
-                    throw std::runtime_error("Possible memory corruption");
+    if (has_deletions_) {
+      std::priority_queue<std::pair<dist_t, tableint>> top_candidates1 =
+          searchBaseLayerST<true>(currObj, query_data, ef_);
+      top_candidates.swap(top_candidates1);
+    } else {
+      std::priority_queue<std::pair<dist_t, tableint>> top_candidates1 =
+          searchBaseLayerST<false>(currObj, query_data, ef_);
+      top_candidates.swap(top_candidates1);
+    }
 
-                auto n = neighbors[idx];
-                if (n == internal_id)
-                    throw std::runtime_error("Trying to connect a node to itself");
-                if (level > element_levels_[n])
-                    throw std::runtime_error("Trying to make a link on a non-existent level");
-                if (n > cur_element_count)
-                    throw std::runtime_error("Trying to set invalid neighbor (too high)");
-                data[idx] = n;
-            }
-            //TODO remove
-            auto[ns, sz] = get_neighbors(internal_id, level);
-            if (sz != neighbors.size()) {
-                throw std::runtime_error("set neighbors failed - sizes differ");
-            }
-            for (int i = 0; i < sz; ++i) {
-                if (neighbors[i] != ns[i]) {
-                    throw std::runtime_error("didn't set neighbors correctly");
-                }
-            }
-        }
+    while (top_candidates.size() > k) {
+      top_candidates.pop();
+    }
+    return top_candidates;
+  };
 
-        template<typename C>
-        void set_neighbors(tableint internal_id, int level, bool isUpdate,
-                           std::priority_queue<std::pair<dist_t, tableint>, C, CompareByFirst> &selectedNeighbors) {
-            linklistsizeint *ll_cur = get_linklist_at_level(internal_id, level);
+  void resizeIndex(size_t new_max_elements) {
+    if (new_max_elements < cur_element_count)
+      throw std::runtime_error("Cannot resize, max element is less than the "
+                               "current number of elements");
 
-            if (*ll_cur && !isUpdate) {
-                std::cerr << "Setting neighbors, but existing neighbors were found: ";
-                std::copy(ll_cur + 1, ll_cur + 1 + getListCount(ll_cur),
-                          std::ostream_iterator<size_t>(std::cerr, " "));
-                std::cerr << std::endl;
-                throw std::runtime_error("The newly inserted element should have blank link list");
-            }
-            auto size = selectedNeighbors.size();
-            if (size > get_m(level)) {
-                throw std::runtime_error("neighbors vector longer than M for selected level");
-            }
-            auto data = (tableint *) (ll_cur + 1);
-            for (int idx = 0; idx < size; ++idx) {
-                if (data[idx] && !isUpdate)
-                    throw std::runtime_error("Possible memory corruption");
+    delete visited_list_pool_;
+    visited_list_pool_ = new VisitedListPool(1, new_max_elements);
 
-                auto[d, n] = selectedNeighbors.top();
-                if (n == internal_id)
-                    throw std::runtime_error("Trying to connect a node to itself");
-                if (level > element_levels_[n])
-                    throw std::runtime_error("Trying to make a link on a non-existent level");
-                if (n > cur_element_count)
-                    throw std::runtime_error("Trying to set invalid neighbor (too high)");
-                data[idx] = n;
-                selectedNeighbors.pop();
-            }
-            setListCount(ll_cur, size);
-        }
+    element_levels_.resize(new_max_elements);
 
-        tableint mutuallyConnectNewElement(const void *data_point, tableint cur_c,
-                                           std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> &top_candidates,
-                                           int level, bool isUpdate) {
-            size_t Mcurmax = get_m(level);
-            getNeighborsByHeuristic2(top_candidates, M_);
-            if (top_candidates.size() > M_)
-                throw std::runtime_error("Should be not be more than M_ candidates returned by the heuristic");
+    std::vector<std::mutex>(new_max_elements).swap(link_list_locks_);
 
-            std::vector<tableint> selectedNeighbors;
-            selectedNeighbors.reserve(M_);
-            while (top_candidates.size() > 0) {
-                selectedNeighbors.push_back(top_candidates.top().second);
-                top_candidates.pop();
-            }
+    throw std::runtime_error("Not implemented for mmaps yet");
+    // Reallocate base layer
+    char *data_level0_memory_new =
+        (char *)malloc(new_max_elements * size_data_per_element_);
+    if (data_level0_memory_new == nullptr)
+      throw std::runtime_error(
+          "Not enough memory: resizeIndex failed to allocate base layer");
+    memcpy(data_level0_memory_new, data_level0_memory_,
+           cur_element_count * size_data_per_element_);
+    free(data_level0_memory_);
+    data_level0_memory_ = data_level0_memory_new;
 
-            tableint next_closest_entry_point = selectedNeighbors[0];
+    // Reallocate all other layers
+    char **linkLists_new = (char **)malloc(sizeof(void *) * new_max_elements);
+    if (linkLists_new == nullptr)
+      throw std::runtime_error(
+          "Not enough memory: resizeIndex failed to allocate other layers");
+    memcpy(linkLists_new, linkLists_, cur_element_count * sizeof(void *));
+    free(linkLists_);
+    linkLists_ = linkLists_new;
 
-            set_neighbors(cur_c, level, isUpdate, selectedNeighbors);
+    max_elements_ = new_max_elements;
+  }
 
-            for (size_t idx = 0; idx < selectedNeighbors.size(); idx++) {
+  void saveIndex(const std::string &location) {
+#ifdef HNSW_MMAP
+    writeIndex(location, false, false);
+#else
+    writeIndex(location, true, false);
+#endif
+  }
 
-                std::unique_lock<std::mutex> lock(link_list_locks_[selectedNeighbors[idx]]);
+  void writeIndex(const std::string &location, bool include_l0,
+                  bool write_level_file) {
 
-                auto[data, sz_link_list_other] = get_neighbors(selectedNeighbors[idx], level);
+    std::ofstream output(location, std::ios::binary);
+    std::streampos position;
 
-                bool is_cur_c_present = has_neighbor(selectedNeighbors[idx], level, cur_c);
+    writeBinaryPOD(output, offsetLevel0_);
+    writeBinaryPOD(output, max_elements_);
+    writeBinaryPOD(output, cur_element_count);
+    writeBinaryPOD(output, size_data_per_element_);
+    writeBinaryPOD(output, label_offset_);
+    writeBinaryPOD(output, offsetData_);
+    writeBinaryPOD(output, maxlevel_);
+    writeBinaryPOD(output, enterpoint_node_);
+    writeBinaryPOD(output, L1M_); // Originally maxM_ == M_, now allows HM-ANN
+                                  // to use same index format
 
-                // If cur_c is already present in the neighboring connections of `selectedNeighbors[idx]` then no need to modify any connections or run the heuristics.
-                if (!is_cur_c_present) {
-                    if (sz_link_list_other < Mcurmax) {
-                        push_neighbor(selectedNeighbors[idx], level, cur_c);
-                    } else {
-                        auto selected = getDataByInternalId(selectedNeighbors[idx]);
-                        // finding the "weakest" element to replace it with the new one
-                        dist_t d_max = fstdistfunc_(getDataByInternalId(cur_c),
-                                                    selected,
-                                                    dist_func_param_);
-                        // Heuristic:
-                        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> candidates;
-                        candidates.emplace(d_max, cur_c);
+    writeBinaryPOD(output, L0M_); // Originally maxM0_
+    writeBinaryPOD(output, M_);
+    writeBinaryPOD(output, mult_);
+    writeBinaryPOD(output, ef_construction_);
 
-                        for (size_t j = 0; j < sz_link_list_other; j++) {
-                            candidates.emplace(
-                                    fstdistfunc_(getDataByInternalId(data[j]),
-                                                 selected,
-                                                 dist_func_param_), data[j]);
-                        }
+    if (nullptr == data_level0_memory_) {
 
-                        getNeighborsByHeuristic2(candidates, Mcurmax);
-                        if (candidates.size() == 0) {
-                            //if (candidates.size() < sz_link_list_other) {
-                            throw std::runtime_error("decreased neighbor list to 0");
-                        } else {
-                            set_neighbors(selectedNeighbors[idx], level, true, candidates);
-                        }
-                    }
-                }
-            }
+      std::cout << "Skipping l0 export since it does not exist in memory, "
+                   "assuming already saved"
+                << std::endl;
+    } else {
+      if (include_l0) {
+        // We don't need to do this with mmaps, since the level 0 data is in the
+        // mmap file
+        output.write(data_level0_memory_,
+                     cur_element_count * size_data_per_element_);
+      }
 
-            return next_closest_entry_point;
-        }
+      if (write_level_file) {
+        auto level_loc = level0_name(location);
+        std::ofstream l0_out(level_loc);
+        l0_out.write(data_level0_memory_,
+                     cur_element_count * size_data_per_element_);
+        l0_out.close();
+      }
+    }
 
-        std::mutex global;
-        size_t ef_;
+    for (size_t i = 0; i < cur_element_count; i++) {
+      unsigned int linkListSize =
+          element_levels_[i] > 0 ? list_size(element_levels_[i]) : 0;
+      writeBinaryPOD(output, linkListSize);
+      if (linkListSize)
+        output.write(linkLists_[i], linkListSize);
+    }
+    output.close();
+  }
 
-        void setEf(size_t ef) {
-            ef_ = ef;
-        }
+  void loadIndex(const std::string &location, SpaceInterface<dist_t> *s,
+                 size_t max_elements_i = 0,
+                 std::string level0_path = "hnswlib.level0") {
 
+    std::ifstream input(location, std::ios::binary);
 
-        tableint get_best_entry_point(const void *query_data, size_t lowest_level = 1) const {
-            tableint currObj = enterpoint_node_;
-            dist_t curdist = fstdistfunc_(query_data, getDataByInternalId(enterpoint_node_), dist_func_param_);
+    if (!input.is_open())
+      throw std::runtime_error("Cannot open file");
 
-            for (size_t level = maxlevel_; level >= lowest_level; level--) {
-                bool changed = true;
-                while (changed) {
-                    changed = false;
-                    auto[neighbors, size] = get_neighbors(currObj, level);
-                    auto closer = find_closer_neighbor(query_data, curdist, neighbors, size);
-                    if (closer.has_value()) {
-                        metric_hops_hier++;
-                        metric_distance_computations_hier += size;
-                        auto[closer_id, closer_dist] = closer.value();
-                        curdist = closer_dist;
-                        currObj = closer_id;
-                        changed = true;
-                    }
-                }
-            }
-            return currObj;
-        }
+    // get file size:
+    input.seekg(0, input.end);
+    std::streampos total_filesize = input.tellg();
+    input.seekg(0, input.beg);
 
-        std::priority_queue<std::pair<dist_t, tableint>> searchKnnInternal(void *query_data, int k) {
-            std::priority_queue<std::pair<dist_t, tableint  >> top_candidates;
-            if (cur_element_count == 0) return top_candidates;
-            tableint currObj = get_best_entry_point(query_data);
+    readBinaryPOD(input, offsetLevel0_);
+    readBinaryPOD(input, max_elements_);
+    readBinaryPOD(input, cur_element_count);
 
-            if (has_deletions_) {
-                std::priority_queue<std::pair<dist_t, tableint  >> top_candidates1 = searchBaseLayerST<true>(currObj,
-                                                                                                             query_data,
-                                                                                                             ef_);
-                top_candidates.swap(top_candidates1);
-            } else {
-                std::priority_queue<std::pair<dist_t, tableint  >> top_candidates1 = searchBaseLayerST<false>(currObj,
-                                                                                                              query_data,
-                                                                                                              ef_);
-                top_candidates.swap(top_candidates1);
-            }
+    size_t max_elements = max_elements_i;
+    if (max_elements < cur_element_count)
+      max_elements = max_elements_;
+    max_elements_ = max_elements;
+    readBinaryPOD(input, size_data_per_element_);
+    readBinaryPOD(input, label_offset_);
+    readBinaryPOD(input, offsetData_);
+    readBinaryPOD(input, maxlevel_);
+    readBinaryPOD(input, enterpoint_node_);
 
-            while (top_candidates.size() > k) {
-                top_candidates.pop();
-            }
-            return top_candidates;
-        };
+    readBinaryPOD(input, L1M_); // originally maxM_, == M_ in hnsw
+    std::cout << "Loaded L1 M = " << L1M_ << std::endl;
+    readBinaryPOD(input, L0M_); // originally maxM_0
+    std::cout << "Loaded L0 M = " << L0M_ << std::endl;
+    readBinaryPOD(input, M_);
+    std::cout << "Loaded M = " << M_ << std::endl;
+    readBinaryPOD(input, mult_);
+    readBinaryPOD(input, ef_construction_);
 
-        void resizeIndex(size_t new_max_elements) {
-            if (new_max_elements < cur_element_count)
-                throw std::runtime_error("Cannot resize, max element is less than the current number of elements");
+    data_size_ = s->get_data_size();
+    fstdistfunc_ = s->get_dist_func();
+    dist_func_param_ = s->get_dist_func_param();
 
+    auto pos = input.tellg();
 
-            delete visited_list_pool_;
-            visited_list_pool_ = new VisitedListPool(1, new_max_elements);
-
-
-            element_levels_.resize(new_max_elements);
-
-            std::vector<std::mutex>(new_max_elements).swap(link_list_locks_);
-
-            throw std::runtime_error("Not implemented for mmaps yet");
-            // Reallocate base layer
-            char *data_level0_memory_new = (char *) malloc(new_max_elements * size_data_per_element_);
-            if (data_level0_memory_new == nullptr)
-                throw std::runtime_error("Not enough memory: resizeIndex failed to allocate base layer");
-            memcpy(data_level0_memory_new, data_level0_memory_, cur_element_count * size_data_per_element_);
-            free(data_level0_memory_);
-            data_level0_memory_ = data_level0_memory_new;
-
-            // Reallocate all other layers
-            char **linkLists_new = (char **) malloc(sizeof(void *) * new_max_elements);
-            if (linkLists_new == nullptr)
-                throw std::runtime_error("Not enough memory: resizeIndex failed to allocate other layers");
-            memcpy(linkLists_new, linkLists_, cur_element_count * sizeof(void *));
-            free(linkLists_);
-            linkLists_ = linkLists_new;
-
-            max_elements_ = new_max_elements;
-
-        }
-
-        void saveIndex(const std::string &location) {
-            std::ofstream output(location, std::ios::binary);
-            std::streampos position;
-
-            writeBinaryPOD(output, offsetLevel0_);
-            writeBinaryPOD(output, max_elements_);
-            writeBinaryPOD(output, cur_element_count);
-            writeBinaryPOD(output, size_data_per_element_);
-            writeBinaryPOD(output, label_offset_);
-            writeBinaryPOD(output, offsetData_);
-            writeBinaryPOD(output, maxlevel_);
-            writeBinaryPOD(output, enterpoint_node_);
-            writeBinaryPOD(output, L1M_); //Originally maxM_ == M_, now allows HM-ANN to use same index format
-
-            writeBinaryPOD(output, L0M_); //Originally maxM0_
-            writeBinaryPOD(output, M_);
-            writeBinaryPOD(output, mult_);
-            writeBinaryPOD(output, ef_construction_);
-
+    // TODO: adapt this for indices that don't store level0
 #ifndef HNSW_MMAP
-            // We don't need to do this with mmaps, since the level 0 data is in the mmap file
-                output.write(data_level0_memory_, cur_element_count * size_data_per_element_);
+    /// Optional - check if index is ok:
+    input.seekg(cur_element_count * size_data_per_element_, input.cur);
+    for (size_t i = 0; i < cur_element_count; i++) {
+      if (input.tellg() < 0 || input.tellg() >= total_filesize) {
+        throw std::runtime_error("Index seems to be corrupted or unsupported");
+      }
+
+      unsigned int linkListSize;
+      readBinaryPOD(input, linkListSize);
+      if (linkListSize != 0) {
+        input.seekg(linkListSize, input.cur);
+      }
+    }
+
+    // throw exception if it either corrupted or old index
+    if (input.tellg() != total_filesize)
+      throw std::runtime_error("Index seems to be corrupted or unsupported");
+
+    input.clear();
+
+    /// Optional check end
 #endif
+    input.seekg(pos, input.beg);
 
-            for (size_t i = 0; i < cur_element_count; i++) {
-                unsigned int linkListSize = element_levels_[i] > 0 ? list_size(element_levels_[i]) : 0;
-                writeBinaryPOD(output, linkListSize);
-                if (linkListSize)
-                    output.write(linkLists_[i], linkListSize);
-            }
-            output.close();
-        }
-
-        void loadIndex(const std::string &location, SpaceInterface<dist_t> *s, size_t max_elements_i = 0,
-                       std::string level0_path = "hnswlib.level0"
-        ) {
-
-
-            std::ifstream input(location, std::ios::binary);
-
-            if (!input.is_open())
-                throw std::runtime_error("Cannot open file");
-
-
-            // get file size:
-            input.seekg(0, input.end);
-            std::streampos total_filesize = input.tellg();
-            input.seekg(0, input.beg);
-
-            readBinaryPOD(input, offsetLevel0_);
-            readBinaryPOD(input, max_elements_);
-            readBinaryPOD(input, cur_element_count);
-
-            size_t max_elements = max_elements_i;
-            if (max_elements < cur_element_count)
-                max_elements = max_elements_;
-            max_elements_ = max_elements;
-            readBinaryPOD(input, size_data_per_element_);
-            readBinaryPOD(input, label_offset_);
-            readBinaryPOD(input, offsetData_);
-            readBinaryPOD(input, maxlevel_);
-            readBinaryPOD(input, enterpoint_node_);
-
-            readBinaryPOD(input, L1M_); // originally maxM_, == M_ in hnsw
-            readBinaryPOD(input, L0M_); //originally maxM_0
-            readBinaryPOD(input, M_);
-            readBinaryPOD(input, mult_);
-            readBinaryPOD(input, ef_construction_);
-
-
-            data_size_ = s->get_data_size();
-            fstdistfunc_ = s->get_dist_func();
-            dist_func_param_ = s->get_dist_func_param();
-
-            auto pos = input.tellg();
-
-
-            //TODO: adapt this for indices that don't store level0
-#ifndef HNSW_MMAP
-            /// Optional - check if index is ok:
-            input.seekg(cur_element_count * size_data_per_element_,input.cur);
-            for (size_t i = 0; i < cur_element_count; i++) {
-                if(input.tellg() < 0 || input.tellg()>=total_filesize){
-                    throw std::runtime_error("Index seems to be corrupted or unsupported");
-                }
-
-                unsigned int linkListSize;
-                readBinaryPOD(input, linkListSize);
-                if (linkListSize != 0) {
-                    input.seekg(linkListSize,input.cur);
-                }
-            }
-
-            // throw exception if it either corrupted or old index
-            if(input.tellg()!=total_filesize)
-                throw std::runtime_error("Index seems to be corrupted or unsupported");
-
-            input.clear();
-
-            /// Optional check end
-#endif
-            input.seekg(pos, input.beg);
-
-
-            auto l0_size = max_elements * size_data_per_element_;
-            auto l0_path = level0_path.c_str();
+    auto l0_size = max_elements * size_data_per_element_;
+    auto l0_path = level0_path.c_str();
 
 #ifdef HNSW_MMAP
-            level0_mapping_ = map_file(l0_path, l0_size, false);
-            data_level0_memory_ = level0_mapping_.mapping;
-            //input.read(data_level0_memory_, cur_element_count * size_data_per_element_);
-            //std::cout << "Loaded data into mmap" << std::endl;
-            //TODO why doesn't this work?
-            //No need to read the index, the map file has the same data
-            std::cout << "Using points from existing " << l0_path << std::endl;
-            // Don't even need to seekg anymore, since level0 no longer included in index
-            //input.seekg(cur_element_count * size_data_per_element_, input.cur);
+    level0_mapping_ = map_file(l0_path, l0_size, false);
+    data_level0_memory_ = level0_mapping_.mapping;
+    // input.read(data_level0_memory_, cur_element_count *
+    // size_data_per_element_); std::cout << "Loaded data into mmap" <<
+    // std::endl;
+    // TODO why doesn't this work?
+    // No need to read the index, the map file has the same data
+    std::cout << "Using points from existing " << l0_path << std::endl;
+    // Don't even need to seekg anymore, since level0 no longer included in
+    // index
+    // input.seekg(cur_element_count * size_data_per_element_, input.cur);
 #else
-            data_level0_memory_ = (char *) malloc(max_elements * size_data_per_element_);
-            input.read(data_level0_memory_, cur_element_count * size_data_per_element_);
+    data_level0_memory_ = (char *)malloc(max_elements * size_data_per_element_);
+    if (data_level0_memory_ == nullptr) {
+      // TODO: fix this. For now, assume this means we're running under
+      // split_index and we should copy the level0 to a file instead
+      auto emergency_level0 = level0_name(location);
+      std::cout << "Couldn't allocate enough memory to load index" << std::endl;
+      if (std::filesystem::exists(emergency_level0)) {
+        std::cout << "Not writing a level0 file since it already exists" << std::endl;
+        input.seekg(cur_element_count * size_data_per_element_, std::ios_base::cur);
+      } else {
+
+        std::cout << "Writing level 0 to separate file: " << emergency_level0
+                  << " for use with mmap-based version of algorithm"
+                  << std::endl;
+        std::ofstream level0_dump(emergency_level0);
+        char buf[4096];
+        size_t todo = cur_element_count * size_data_per_element_;
+        while (todo > 0) {
+          auto n = std::min((size_t)4096, todo);
+          input.read(buf, n);
+          level0_dump.write(buf, n);
+          todo -= n;
+        }
+        level0_dump.close();
+        std::cout << "Finished writing level0 file";
+      }
+
+      // throw std::runtime_error("Not enough memory: loadIndex failed to
+      // allocate level0");
+    } else {
+      input.read(data_level0_memory_,
+                 cur_element_count * size_data_per_element_);
+    }
 #endif
-            if (data_level0_memory_ == nullptr)
-                throw std::runtime_error("Not enough memory: loadIndex failed to allocate level0");
 
+    // size_links_per_element_ = maxM_ * sizeof(tableint) +
+    // sizeof(linklistsizeint);
 
-            //size_links_per_element_ = maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
+    std::cout << "Loading hierarchy" << std::endl;
+    size_links_level0_ = get_m(0) * sizeof(tableint) + sizeof(linklistsizeint);
+    std::vector<std::mutex>(max_elements).swap(link_list_locks_);
+    std::vector<std::mutex>(max_update_element_locks)
+        .swap(link_list_update_locks_);
 
+    visited_list_pool_ = new VisitedListPool(1, max_elements);
 
-            size_links_level0_ = get_m(0) * sizeof(tableint) + sizeof(linklistsizeint);
-            std::vector<std::mutex>(max_elements).swap(link_list_locks_);
-            std::vector<std::mutex>(max_update_element_locks).swap(link_list_update_locks_);
-
-
-            visited_list_pool_ = new VisitedListPool(1, max_elements);
-
-
-            linkLists_ = (char **) malloc(sizeof(void *) * max_elements);
-            if (linkLists_ == nullptr)
-                throw std::runtime_error("Not enough memory: loadIndex failed to allocate linklists");
-            element_levels_ = std::vector<int>(max_elements);
-            revSize_ = 1.0 / mult_;
-            ef_ = 10;
-            for (size_t i = 0; i < cur_element_count; i++) {
-                label_lookup_[getExternalLabel(i)] = i;
-                unsigned int linkListSize;
-                readBinaryPOD(input, linkListSize);
-                if (linkListSize == 0) {
-                    element_levels_[i] = 0;
-                    linkLists_[i] = nullptr;
-                } else {
-                    element_levels_[i] = level_from_list_size(linkListSize);
-                    linkLists_[i] = (char *) malloc(linkListSize);
-                    if (linkLists_[i] == nullptr)
-                        throw std::runtime_error("Not enough memory: loadIndex failed to allocate linklist");
-                    input.read(linkLists_[i], linkListSize);
-                }
-            }
-
-            has_deletions_ = false;
-
-            for (size_t i = 0; i < cur_element_count; i++) {
-                if (isMarkedDeleted(i))
-                    has_deletions_ = true;
-            }
-
-            input.close();
-
-            return;
+    linkLists_ = (char **)malloc(sizeof(void *) * max_elements);
+    if (linkLists_ == nullptr)
+      throw std::runtime_error(
+          "Not enough memory: loadIndex failed to allocate linklists");
+    element_levels_ = std::vector<int>(max_elements);
+    revSize_ = 1.0 / mult_;
+    ef_ = 10;
+    for (size_t i = 0; i < cur_element_count; i++) {
+        // Skip this if we couldn't actually load the level 0 data
+        if (nullptr != data_level0_memory_) {
+            label_lookup_[getExternalLabel(i)] = i;
         }
+      unsigned int linkListSize;
+      readBinaryPOD(input, linkListSize);
+      if (linkListSize == 0) {
+        element_levels_[i] = 0;
+        linkLists_[i] = nullptr;
+      } else {
+        element_levels_[i] = level_from_list_size(linkListSize);
+        linkLists_[i] = (char *)malloc(linkListSize);
+        if (linkLists_[i] == nullptr)
+          throw std::runtime_error(
+              "Not enough memory: loadIndex failed to allocate linklist");
+        input.read(linkLists_[i], linkListSize);
+      }
+    }
 
-        template<typename data_t>
-        std::vector<data_t> getDataByLabel(labeltype label) {
-            tableint label_c;
-            auto search = label_lookup_.find(label);
-            if (search == label_lookup_.end() || isMarkedDeleted(search->second)) {
-                throw std::runtime_error("Label not found");
-            }
-            label_c = search->second;
+    has_deletions_ = false;
 
-            char *data_ptrv = getDataByInternalId(label_c);
-            size_t dim = *((size_t *) dist_func_param_);
-            std::vector<data_t> data;
-            data_t *data_ptr = (data_t *) data_ptrv;
-            for (int i = 0; i < dim; i++) {
-                data.push_back(*data_ptr);
-                data_ptr += 1;
-            }
-            return data;
-        }
-
-        static const unsigned char DELETE_MARK = 0x01;
-//        static const unsigned char REUSE_MARK = 0x10;
-        /**
-         * Marks an element with the given label deleted, does NOT really change the current graph.
-         * @param label
-         */
-        void markDelete(labeltype label) {
+    if (nullptr != data_level0_memory_) {
+        for (size_t i = 0; i < cur_element_count; i++) {
+        if (isMarkedDeleted(i))
             has_deletions_ = true;
-            auto search = label_lookup_.find(label);
-            if (search == label_lookup_.end()) {
-                throw std::runtime_error("Label not found");
+        }
+    }
+
+    input.close();
+    std::cout << "Completed reading index" << std::endl;
+    return;
+  }
+
+  template <typename data_t>
+  std::vector<data_t> getDataByLabel(labeltype label) {
+    tableint label_c;
+    auto search = label_lookup_.find(label);
+    if (search == label_lookup_.end() || isMarkedDeleted(search->second)) {
+      throw std::runtime_error("Label not found");
+    }
+    label_c = search->second;
+
+    char *data_ptrv = getDataByInternalId(label_c);
+    size_t dim = *((size_t *)dist_func_param_);
+    std::vector<data_t> data;
+    data_t *data_ptr = (data_t *)data_ptrv;
+    for (int i = 0; i < dim; i++) {
+      data.push_back(*data_ptr);
+      data_ptr += 1;
+    }
+    return data;
+  }
+
+  static const unsigned char DELETE_MARK = 0x01;
+  //        static const unsigned char REUSE_MARK = 0x10;
+  /**
+   * Marks an element with the given label deleted, does NOT really change the
+   * current graph.
+   * @param label
+   */
+  void markDelete(labeltype label) {
+    has_deletions_ = true;
+    auto search = label_lookup_.find(label);
+    if (search == label_lookup_.end()) {
+      throw std::runtime_error("Label not found");
+    }
+    markDeletedInternal(search->second);
+  }
+
+  /**
+   * Uses the first 8 bits of the memory for the linked list to store the mark,
+   * whereas maxM0_ has to be limited to the lower 24 bits, however, still large
+   * enough in almost all cases.
+   * @param internalId
+   */
+  void markDeletedInternal(tableint internalId) {
+    unsigned char *ll_cur = ((unsigned char *)get_linklist0(internalId)) + 2;
+    *ll_cur |= DELETE_MARK;
+  }
+
+  /**
+   * Remove the deleted mark of the node.
+   * @param internalId
+   */
+  void unmarkDeletedInternal(tableint internalId) {
+    unsigned char *ll_cur = ((unsigned char *)get_linklist0(internalId)) + 2;
+    *ll_cur &= ~DELETE_MARK;
+  }
+
+  /**
+   * Checks the first 8 bits of the memory to see if the element is marked
+   * deleted.
+   * @param internalId
+   * @return
+   */
+  bool isMarkedDeleted(tableint internalId) const {
+    unsigned char *ll_cur = ((unsigned char *)get_linklist0(internalId)) + 2;
+    return *ll_cur & DELETE_MARK;
+  }
+
+  unsigned short int getListCount(linklistsizeint *ptr) const {
+    return *((unsigned short int *)ptr);
+  }
+
+  void setListCount(linklistsizeint *ptr, unsigned short int size) const {
+    *((unsigned short int *)(ptr)) = *((unsigned short int *)&size);
+  }
+
+  void addPoint(const void *data_point, labeltype label) {
+    addPoint(data_point, label, -1);
+  }
+
+  void updatePoint(const void *dataPoint, tableint internalId,
+                   float updateNeighborProbability) {
+    throw std::runtime_error("updatePoint needs to be evaluated");
+    // update the feature vector associated with existing point with new vector
+    memcpy(getDataByInternalId(internalId), dataPoint, data_size_);
+
+    int maxLevelCopy = maxlevel_;
+    tableint entryPointCopy = enterpoint_node_;
+    // If point to be updated is entry point and graph just contains single
+    // element then just return.
+    if (entryPointCopy == internalId && cur_element_count == 1)
+      return;
+
+    int elemLevel = element_levels_[internalId];
+    std::uniform_real_distribution<float> distribution(0.0, 1.0);
+    for (int layer = 0; layer <= elemLevel; layer++) {
+      std::unordered_set<tableint> sCand;
+      std::unordered_set<tableint> sNeigh;
+      std::vector<tableint> listOneHop =
+          getConnectionsWithLock(internalId, layer);
+      if (listOneHop.size() == 0)
+        continue;
+
+      sCand.insert(internalId);
+
+      for (auto &&elOneHop : listOneHop) {
+        sCand.insert(elOneHop);
+
+        if (distribution(update_probability_generator_) >
+            updateNeighborProbability)
+          continue;
+
+        sNeigh.insert(elOneHop);
+
+        std::vector<tableint> listTwoHop =
+            getConnectionsWithLock(elOneHop, layer);
+        for (auto &&elTwoHop : listTwoHop) {
+          sCand.insert(elTwoHop);
+        }
+      }
+
+      for (auto &&neigh : sNeigh) {
+        //                    if (neigh == internalId)
+        //                        continue;
+
+        std::priority_queue<std::pair<dist_t, tableint>,
+                            std::vector<std::pair<dist_t, tableint>>,
+                            CompareByFirst>
+            candidates;
+        size_t size =
+            sCand.find(neigh) == sCand.end()
+                ? sCand.size()
+                : sCand.size() - 1; // sCand guaranteed to have size >= 1
+        size_t elementsToKeep = std::min(ef_construction_, size);
+        for (auto &&cand : sCand) {
+          if (cand == neigh)
+            continue;
+
+          dist_t distance =
+              fstdistfunc_(getDataByInternalId(neigh),
+                           getDataByInternalId(cand), dist_func_param_);
+          if (candidates.size() < elementsToKeep) {
+            candidates.emplace(distance, cand);
+          } else {
+            if (distance < candidates.top().first) {
+              candidates.pop();
+              candidates.emplace(distance, cand);
             }
-            markDeletedInternal(search->second);
+          }
         }
 
-        /**
-         * Uses the first 8 bits of the memory for the linked list to store the mark,
-         * whereas maxM0_ has to be limited to the lower 24 bits, however, still large enough in almost all cases.
-         * @param internalId
-         */
-        void markDeletedInternal(tableint internalId) {
-            unsigned char *ll_cur = ((unsigned char *) get_linklist0(internalId)) + 2;
-            *ll_cur |= DELETE_MARK;
+        // Retrieve neighbours using heuristic and set connections.
+        getNeighborsByHeuristic2(candidates, get_m(layer));
+
+        {
+          std::unique_lock<std::mutex> lock(link_list_locks_[neigh]);
+          linklistsizeint *ll_cur;
+          ll_cur = get_linklist_at_level(neigh, layer);
+          size_t candSize = candidates.size();
+          setListCount(ll_cur, candSize);
+          tableint *data = (tableint *)(ll_cur + 1);
+          for (size_t idx = 0; idx < candSize; idx++) {
+            data[idx] = candidates.top().second;
+            candidates.pop();
+          }
         }
+      }
+    }
 
-        /**
-         * Remove the deleted mark of the node.
-         * @param internalId
-         */
-        void unmarkDeletedInternal(tableint internalId) {
-            unsigned char *ll_cur = ((unsigned char *) get_linklist0(internalId)) + 2;
-            *ll_cur &= ~DELETE_MARK;
-        }
+    repairConnectionsForUpdate(dataPoint, entryPointCopy, internalId, elemLevel,
+                               maxLevelCopy);
+  };
 
-        /**
-         * Checks the first 8 bits of the memory to see if the element is marked deleted.
-         * @param internalId
-         * @return
-         */
-        bool isMarkedDeleted(tableint internalId) const {
-            unsigned char *ll_cur = ((unsigned char *) get_linklist0(internalId)) + 2;
-            return *ll_cur & DELETE_MARK;
-        }
-
-        unsigned short int getListCount(linklistsizeint *ptr) const {
-            return *((unsigned short int *) ptr);
-        }
-
-        void setListCount(linklistsizeint *ptr, unsigned short int size) const {
-            *((unsigned short int *) (ptr)) = *((unsigned short int *) &size);
-        }
-
-        void addPoint(const void *data_point, labeltype label) {
-            addPoint(data_point, label, -1);
-        }
-
-        void updatePoint(const void *dataPoint, tableint internalId, float updateNeighborProbability) {
-            throw std::runtime_error("updatePoint needs to be evaluated");
-            // update the feature vector associated with existing point with new vector
-            memcpy(getDataByInternalId(internalId), dataPoint, data_size_);
-
-            int maxLevelCopy = maxlevel_;
-            tableint entryPointCopy = enterpoint_node_;
-            // If point to be updated is entry point and graph just contains single element then just return.
-            if (entryPointCopy == internalId && cur_element_count == 1)
-                return;
-
-            int elemLevel = element_levels_[internalId];
-            std::uniform_real_distribution<float> distribution(0.0, 1.0);
-            for (int layer = 0; layer <= elemLevel; layer++) {
-                std::unordered_set<tableint> sCand;
-                std::unordered_set<tableint> sNeigh;
-                std::vector<tableint> listOneHop = getConnectionsWithLock(internalId, layer);
-                if (listOneHop.size() == 0)
-                    continue;
-
-                sCand.insert(internalId);
-
-                for (auto &&elOneHop : listOneHop) {
-                    sCand.insert(elOneHop);
-
-                    if (distribution(update_probability_generator_) > updateNeighborProbability)
-                        continue;
-
-                    sNeigh.insert(elOneHop);
-
-                    std::vector<tableint> listTwoHop = getConnectionsWithLock(elOneHop, layer);
-                    for (auto &&elTwoHop : listTwoHop) {
-                        sCand.insert(elTwoHop);
-                    }
-                }
-
-                for (auto &&neigh : sNeigh) {
-//                    if (neigh == internalId)
-//                        continue;
-
-                    std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> candidates;
-                    size_t size = sCand.find(neigh) == sCand.end() ? sCand.size() : sCand.size() -
-                                                                                    1; // sCand guaranteed to have size >= 1
-                    size_t elementsToKeep = std::min(ef_construction_, size);
-                    for (auto &&cand : sCand) {
-                        if (cand == neigh)
-                            continue;
-
-                        dist_t distance = fstdistfunc_(getDataByInternalId(neigh), getDataByInternalId(cand),
-                                                       dist_func_param_);
-                        if (candidates.size() < elementsToKeep) {
-                            candidates.emplace(distance, cand);
-                        } else {
-                            if (distance < candidates.top().first) {
-                                candidates.pop();
-                                candidates.emplace(distance, cand);
-                            }
-                        }
-                    }
-
-                    // Retrieve neighbours using heuristic and set connections.
-                    getNeighborsByHeuristic2(candidates, get_m(layer));
-
-                    {
-                        std::unique_lock<std::mutex> lock(link_list_locks_[neigh]);
-                        linklistsizeint *ll_cur;
-                        ll_cur = get_linklist_at_level(neigh, layer);
-                        size_t candSize = candidates.size();
-                        setListCount(ll_cur, candSize);
-                        tableint *data = (tableint *) (ll_cur + 1);
-                        for (size_t idx = 0; idx < candSize; idx++) {
-                            data[idx] = candidates.top().second;
-                            candidates.pop();
-                        }
-                    }
-                }
-            }
-
-            repairConnectionsForUpdate(dataPoint, entryPointCopy, internalId, elemLevel, maxLevelCopy);
-        };
-
-        void
-        repairConnectionsForUpdate(const void *dataPoint, tableint entryPointInternalId, tableint dataPointInternalId,
-                                   int dataPointLevel, int maxLevel) {
-            tableint currObj = entryPointInternalId;
-            if (dataPointLevel < maxLevel) {
-                dist_t curdist = fstdistfunc_(dataPoint, getDataByInternalId(currObj), dist_func_param_);
-                for (int level = maxLevel; level > dataPointLevel; level--) {
-                    bool changed = true;
-                    while (changed) {
-                        changed = false;
-                        unsigned int *data;
-                        std::unique_lock<std::mutex> lock(link_list_locks_[currObj]);
-                        data = get_linklist_at_level(currObj, level);
-                        int size = getListCount(data);
-                        tableint *datal = (tableint *) (data + 1);
+  void repairConnectionsForUpdate(const void *dataPoint,
+                                  tableint entryPointInternalId,
+                                  tableint dataPointInternalId,
+                                  int dataPointLevel, int maxLevel) {
+    tableint currObj = entryPointInternalId;
+    if (dataPointLevel < maxLevel) {
+      dist_t curdist = fstdistfunc_(dataPoint, getDataByInternalId(currObj),
+                                    dist_func_param_);
+      for (int level = maxLevel; level > dataPointLevel; level--) {
+        bool changed = true;
+        while (changed) {
+          changed = false;
+          unsigned int *data;
+          std::unique_lock<std::mutex> lock(link_list_locks_[currObj]);
+          data = get_linklist_at_level(currObj, level);
+          int size = getListCount(data);
+          tableint *datal = (tableint *)(data + 1);
 #ifdef USE_SSE
-                        _mm_prefetch(getDataByInternalId(*datal), _MM_HINT_T0);
+          _mm_prefetch(getDataByInternalId(*datal), _MM_HINT_T0);
 #endif
-                        for (int i = 0; i < size; i++) {
+          for (int i = 0; i < size; i++) {
 #ifdef USE_SSE
-                            _mm_prefetch(getDataByInternalId(*(datal + i + 1)), _MM_HINT_T0);
+            _mm_prefetch(getDataByInternalId(*(datal + i + 1)), _MM_HINT_T0);
 #endif
-                            tableint cand = datal[i];
-                            dist_t d = fstdistfunc_(dataPoint, getDataByInternalId(cand), dist_func_param_);
-                            if (d < curdist) {
-                                curdist = d;
-                                currObj = cand;
-                                changed = true;
-                            }
-                        }
-                    }
-                }
+            tableint cand = datal[i];
+            dist_t d = fstdistfunc_(dataPoint, getDataByInternalId(cand),
+                                    dist_func_param_);
+            if (d < curdist) {
+              curdist = d;
+              currObj = cand;
+              changed = true;
             }
+          }
+        }
+      }
+    }
 
-            if (dataPointLevel > maxLevel)
-                throw std::runtime_error("Level of item to be updated cannot be bigger than max level");
+    if (dataPointLevel > maxLevel)
+      throw std::runtime_error(
+          "Level of item to be updated cannot be bigger than max level");
 
-            for (int level = dataPointLevel; level >= 0; level--) {
-                std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> topCandidates = searchBaseLayer(
-                        currObj, dataPoint, level);
+    for (int level = dataPointLevel; level >= 0; level--) {
+      std::priority_queue<std::pair<dist_t, tableint>,
+                          std::vector<std::pair<dist_t, tableint>>,
+                          CompareByFirst>
+          topCandidates = searchBaseLayer(currObj, dataPoint, level);
 
-                std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> filteredTopCandidates;
-                while (topCandidates.size() > 0) {
-                    if (topCandidates.top().second != dataPointInternalId)
-                        filteredTopCandidates.push(topCandidates.top());
+      std::priority_queue<std::pair<dist_t, tableint>,
+                          std::vector<std::pair<dist_t, tableint>>,
+                          CompareByFirst>
+          filteredTopCandidates;
+      while (topCandidates.size() > 0) {
+        if (topCandidates.top().second != dataPointInternalId)
+          filteredTopCandidates.push(topCandidates.top());
 
-                    topCandidates.pop();
-                }
+        topCandidates.pop();
+      }
 
-                // Since element_levels_ is being used to get `dataPointLevel`, there could be cases where `topCandidates` could just contains entry point itself.
-                // To prevent self loops, the `topCandidates` is filtered and thus can be empty.
-                if (filteredTopCandidates.size() > 0) {
-                    bool epDeleted = isMarkedDeleted(entryPointInternalId);
-                    if (epDeleted) {
-                        filteredTopCandidates.emplace(
-                                fstdistfunc_(dataPoint, getDataByInternalId(entryPointInternalId), dist_func_param_),
-                                entryPointInternalId);
-                        if (filteredTopCandidates.size() > ef_construction_)
-                            filteredTopCandidates.pop();
-                    }
-
-                    currObj = mutuallyConnectNewElement(dataPoint, dataPointInternalId, filteredTopCandidates, level,
-                                                        true);
-                }
-            }
+      // Since element_levels_ is being used to get `dataPointLevel`, there
+      // could be cases where `topCandidates` could just contains entry point
+      // itself. To prevent self loops, the `topCandidates` is filtered and thus
+      // can be empty.
+      if (filteredTopCandidates.size() > 0) {
+        bool epDeleted = isMarkedDeleted(entryPointInternalId);
+        if (epDeleted) {
+          filteredTopCandidates.emplace(
+              fstdistfunc_(dataPoint, getDataByInternalId(entryPointInternalId),
+                           dist_func_param_),
+              entryPointInternalId);
+          if (filteredTopCandidates.size() > ef_construction_)
+            filteredTopCandidates.pop();
         }
 
-        std::vector<tableint> getConnectionsWithLock(tableint internalId, int level) {
-            std::unique_lock<std::mutex> lock(link_list_locks_[internalId]);
-            unsigned int *data = get_linklist_at_level(internalId, level);
-            int size = getListCount(data);
-            std::vector<tableint> result(size);
-            tableint *ll = (tableint *) (data + 1);
-            memcpy(result.data(), ll, size * sizeof(tableint));
-            return result;
-        };
+        currObj = mutuallyConnectNewElement(dataPoint, dataPointInternalId,
+                                            filteredTopCandidates, level, true);
+      }
+    }
+  }
 
-        tableint addPoint(const void *data_point, labeltype label, int level) {
+  std::vector<tableint> getConnectionsWithLock(tableint internalId, int level) {
+    std::unique_lock<std::mutex> lock(link_list_locks_[internalId]);
+    unsigned int *data = get_linklist_at_level(internalId, level);
+    int size = getListCount(data);
+    std::vector<tableint> result(size);
+    tableint *ll = (tableint *)(data + 1);
+    memcpy(result.data(), ll, size * sizeof(tableint));
+    return result;
+  };
 
-            tableint cur_c = 0;
-            {
-                // Checking if the element with the same label already exists
-                // if so, updating it *instead* of creating a new element.
-                std::unique_lock<std::mutex> templock_curr(cur_element_count_guard_);
-                auto search = label_lookup_.find(label);
-                if (search != label_lookup_.end()) {
-                    tableint existingInternalId = search->second;
+  tableint addPoint(const void *data_point, labeltype label, int level) {
 
-                    templock_curr.unlock();
+    tableint cur_c = 0;
+    {
+      // Checking if the element with the same label already exists
+      // if so, updating it *instead* of creating a new element.
+      std::unique_lock<std::mutex> templock_curr(cur_element_count_guard_);
+      auto search = label_lookup_.find(label);
+      if (search != label_lookup_.end()) {
+        tableint existingInternalId = search->second;
 
-                    std::unique_lock<std::mutex> lock_el_update(
-                            link_list_update_locks_[(existingInternalId & (max_update_element_locks - 1))]);
-                    updatePoint(data_point, existingInternalId, 1.0);
-                    return existingInternalId;
-                }
+        templock_curr.unlock();
 
-                if (cur_element_count >= max_elements_) {
-                    throw std::runtime_error("The number of elements exceeds the specified limit");
-                };
+        std::unique_lock<std::mutex> lock_el_update(link_list_update_locks_[(
+            existingInternalId & (max_update_element_locks - 1))]);
+        updatePoint(data_point, existingInternalId, 1.0);
+        return existingInternalId;
+      }
 
-                cur_c = cur_element_count;
-                cur_element_count++;
-                label_lookup_[label] = cur_c;
+      if (cur_element_count >= max_elements_) {
+        throw std::runtime_error(
+            "The number of elements exceeds the specified limit");
+      };
+
+      cur_c = cur_element_count;
+      cur_element_count++;
+      label_lookup_[label] = cur_c;
+    }
+
+    // Take update lock to prevent race conditions on an element with
+    // insertion/update at the same time.
+    std::unique_lock<std::mutex> lock_el_update(
+        link_list_update_locks_[(cur_c & (max_update_element_locks - 1))]);
+    std::unique_lock<std::mutex> lock_el(link_list_locks_[cur_c]);
+    int curlevel = getRandomLevel(mult_);
+    if (level > 0)
+      curlevel = level;
+
+    set_level(cur_c, curlevel);
+
+    std::unique_lock<std::mutex> templock(global);
+    int maxlevelcopy = maxlevel_;
+    if (curlevel <= maxlevelcopy)
+      templock.unlock();
+    tableint currObj = enterpoint_node_;
+    tableint enterpoint_copy = enterpoint_node_;
+
+    memset(data_level0_memory_ + cur_c * size_data_per_element_ + offsetLevel0_,
+           0, size_data_per_element_);
+
+    // Initialisation of the data and label
+    memcpy(getExternalLabeLp(cur_c), &label, sizeof(labeltype));
+    memcpy(getDataByInternalId(cur_c), data_point, data_size_);
+
+    if (curlevel) {
+      init_list(cur_c, curlevel);
+    }
+
+    if ((signed)currObj != -1) {
+
+      if (curlevel < maxlevelcopy) {
+
+        dist_t curdist = fstdistfunc_(data_point, getDataByInternalId(currObj),
+                                      dist_func_param_);
+        // Can't use find_best_entry_point because it doesn't do locking
+        for (int level = maxlevelcopy; level > curlevel; level--) {
+          bool changed = true;
+          while (changed) {
+            changed = false;
+            std::unique_lock<std::mutex> lock(link_list_locks_[currObj]);
+            auto [neighbors, size] = get_neighbors(currObj, level);
+
+            auto closer =
+                find_closer_neighbor(data_point, curdist, neighbors, size);
+            if (closer.has_value()) {
+              auto [neighbor, dist] = closer.value();
+              curdist = dist;
+              currObj = neighbor;
+              changed = true;
             }
-
-            // Take update lock to prevent race conditions on an element with insertion/update at the same time.
-            std::unique_lock<std::mutex> lock_el_update(
-                    link_list_update_locks_[(cur_c & (max_update_element_locks - 1))]);
-            std::unique_lock<std::mutex> lock_el(link_list_locks_[cur_c]);
-            int curlevel = getRandomLevel(mult_);
-            if (level > 0)
-                curlevel = level;
-
-            set_level(cur_c, curlevel);
-
-
-            std::unique_lock<std::mutex> templock(global);
-            int maxlevelcopy = maxlevel_;
-            if (curlevel <= maxlevelcopy)
-                templock.unlock();
-            tableint currObj = enterpoint_node_;
-            tableint enterpoint_copy = enterpoint_node_;
-
-
-            memset(data_level0_memory_ + cur_c * size_data_per_element_ + offsetLevel0_, 0, size_data_per_element_);
-
-            // Initialisation of the data and label
-            memcpy(getExternalLabeLp(cur_c), &label, sizeof(labeltype));
-            memcpy(getDataByInternalId(cur_c), data_point, data_size_);
-
-
-            if (curlevel) {
-                init_list(cur_c, curlevel);
-            }
-
-            if ((signed) currObj != -1) {
-
-                if (curlevel < maxlevelcopy) {
-
-                    dist_t curdist = fstdistfunc_(data_point, getDataByInternalId(currObj), dist_func_param_);
-                    //Can't use find_best_entry_point because it doesn't do locking
-                    for (int level = maxlevelcopy; level > curlevel; level--) {
-                        bool changed = true;
-                        while (changed) {
-                            changed = false;
-                            std::unique_lock<std::mutex> lock(link_list_locks_[currObj]);
-                            auto[neighbors, size] = get_neighbors(currObj, level);
-
-                            auto closer = find_closer_neighbor(data_point, curdist, neighbors, size);
-                            if (closer.has_value()) {
-                                auto[neighbor, dist] = closer.value();
-                                curdist = dist;
-                                currObj = neighbor;
-                                changed = true;
-                            }
-                        }
-                    }
-                }
-
-                bool epDeleted = isMarkedDeleted(enterpoint_copy);
-                for (int level = std::min(curlevel, maxlevelcopy); level >= 0; level--) {
-                    if (level > maxlevelcopy || level < 0)  // possible?
-                        throw std::runtime_error("Level error");
-
-                    std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates = searchBaseLayer(
-                            currObj, data_point, level);
-                    if (epDeleted) {
-                        top_candidates.emplace(
-                                fstdistfunc_(data_point, getDataByInternalId(enterpoint_copy), dist_func_param_),
-                                enterpoint_copy);
-                        if (top_candidates.size() > ef_construction_)
-                            top_candidates.pop();
-                    }
-                    currObj = mutuallyConnectNewElement(data_point, cur_c, top_candidates, level, false);
-                }
-
-
-            } else {
-                // Do nothing for the first element
-                enterpoint_node_ = 0;
-                maxlevel_ = curlevel;
-
-            }
-
-            //Releasing lock for the maximum level
-            if (curlevel > maxlevelcopy) {
-                enterpoint_node_ = cur_c;
-                maxlevel_ = curlevel;
-            }
-            return cur_c;
+          }
         }
+      }
 
-        size_t list_size(size_t level) const {
-            auto sum = 1;
-            for (int i = 1; i <= level; ++i) {
-                sum += get_m(level) * sizeof(tableint) + sizeof(linklistsizeint);
-            }
-            return sum;
+      bool epDeleted = isMarkedDeleted(enterpoint_copy);
+      for (int level = std::min(curlevel, maxlevelcopy); level >= 0; level--) {
+        if (level > maxlevelcopy || level < 0) // possible?
+          throw std::runtime_error("Level error");
+
+        std::priority_queue<std::pair<dist_t, tableint>,
+                            std::vector<std::pair<dist_t, tableint>>,
+                            CompareByFirst>
+            top_candidates = searchBaseLayer(currObj, data_point, level);
+        if (epDeleted) {
+          top_candidates.emplace(
+              fstdistfunc_(data_point, getDataByInternalId(enterpoint_copy),
+                           dist_func_param_),
+              enterpoint_copy);
+          if (top_candidates.size() > ef_construction_)
+            top_candidates.pop();
         }
+        currObj = mutuallyConnectNewElement(data_point, cur_c, top_candidates,
+                                            level, false);
+      }
 
-        size_t level_from_list_size(size_t list_size) {
-            auto initial_list_size = list_size;
-            auto level = 0;
-            if (list_size > 0)
-                list_size--; // For some reason list sizes have an extra byte
-            while (list_size) {
-                level++;
-                list_size -= get_m(level);
-                list_size--; // for the size byte
-                if (list_size > initial_list_size)
-                    throw std::runtime_error("Couldn't retrieve level from list size");
-            }
-            return level;
+    } else {
+      // Do nothing for the first element
+      enterpoint_node_ = 0;
+      maxlevel_ = curlevel;
+    }
+
+    // Releasing lock for the maximum level
+    if (curlevel > maxlevelcopy) {
+      enterpoint_node_ = cur_c;
+      maxlevel_ = curlevel;
+    }
+    return cur_c;
+  }
+
+  size_t list_size(size_t level) const {
+    auto sum = 1;
+    for (int i = 1; i <= level; ++i) {
+      sum += get_m(level) * sizeof(tableint) + sizeof(linklistsizeint);
+    }
+    return sum;
+  }
+
+  size_t level_from_list_size(size_t list_size) {
+    auto initial_list_size = list_size;
+    auto level = 0;
+    if (list_size > 0)
+      list_size--; // For some reason list sizes have an extra byte
+    while (list_size) {
+      level++;
+      list_size -= get_m(level);
+      list_size--; // for the size byte
+      if (list_size > initial_list_size)
+        throw std::runtime_error("Couldn't retrieve level from list size: " + std::to_string(list_size));
+    }
+    return level;
+  }
+
+  void init_list(tableint internal_id, size_t level) {
+    if (level == 0)
+      throw std::runtime_error(
+          "init_list should only be called for L1 and above");
+    auto size = list_size(level);
+    linkLists_[internal_id] = (char *)malloc(size);
+    if (linkLists_[internal_id] == nullptr)
+      throw std::runtime_error(
+          "Not enough memory: failed to allocate linklist");
+    memset(linkLists_[internal_id], 0, size);
+  };
+
+  virtual QueryResult searchKnn(const void *query_data, size_t k) const {
+
+    QueryResult result = {};
+    if (cur_element_count == 0)
+      return result;
+    StopW timer;
+    tableint currObj = get_best_entry_point(query_data);
+    result.times.ln_micros = timer.getElapsedTimeMicro();
+    timer.reset();
+    std::priority_queue<std::pair<dist_t, tableint>,
+                        std::vector<std::pair<dist_t, tableint>>,
+                        CompareByFirst>
+        top_candidates;
+    if (has_deletions_) {
+      top_candidates =
+          searchBaseLayerST<true, true>(currObj, query_data, std::max(ef_, k));
+    } else {
+      top_candidates =
+          searchBaseLayerST<false, true>(currObj, query_data, std::max(ef_, k));
+    }
+
+    while (top_candidates.size() > k) {
+      top_candidates.pop();
+    }
+    while (top_candidates.size() > 0) {
+      std::pair<dist_t, tableint> rez = top_candidates.top();
+      result.result.push(std::pair<dist_t, labeltype>(
+          rez.first, getExternalLabel(rez.second)));
+      top_candidates.pop();
+    }
+    result.times.l0_micros = timer.getElapsedTimeMicro();
+    return result;
+  }
+
+  std::optional<std::pair<tableint, dist_t>>
+  find_closer_neighbor(const void *query_point, dist_t min_dist,
+                       const tableint *neighbors, size_t size) const {
+    tableint n = std::numeric_limits<tableint>::max();
+    for (int i = 0; i < size; i++) {
+      tableint cand = neighbors[i];
+      if (cand < 0 || cand > max_elements_) {
+        std::cerr << "Invalid neighbor found in neighbors list (" << cand
+                  << ") all neighbors in list: ";
+        std::copy(neighbors, neighbors + size,
+                  std::ostream_iterator<size_t>(std::cerr, " "));
+        std::cerr << std::endl;
+        throw std::runtime_error("cand error");
+      }
+      dist_t d = fstdistfunc_(query_point, getDataByInternalId(cand),
+                              dist_func_param_);
+
+      if (d < min_dist) {
+        min_dist = d;
+        n = cand;
+      }
+    }
+    if (n != std::numeric_limits<tableint>::max()) {
+      return std::make_optional(std::make_pair(n, min_dist));
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  std::pair<tableint *, size_t> get_neighbors(tableint internal_id,
+                                              size_t level) const {
+    if (level > maxlevel_)
+      throw std::runtime_error("requested neighbors from a non-existent level");
+    if (level > element_levels_[internal_id])
+      throw std::runtime_error(
+          "requested neighbors from a level this node isn't in");
+    auto data = get_linklist_at_level(internal_id, level);
+    auto size = getListCount(data);
+    return std::make_pair((tableint *)data + 1, size);
+  };
+
+  bool has_neighbor(tableint internal_id, int level, tableint neighbor) const {
+    if (level > maxlevel_)
+      throw std::runtime_error("requested neighbors from a non-existent level");
+    auto [data, size] = get_neighbors(internal_id, level);
+    for (int i = 0; i < size; ++i) {
+      if (data[i] == neighbor) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  std::pair<tableint, dist_t> find_closest_neighbor(tableint internal_id,
+                                                    void *query_point,
+                                                    size_t level) const {
+    if (level > maxlevel_)
+      throw std::runtime_error("requested neighbors from a non-existent level");
+    auto best = std::numeric_limits<dist_t>::max();
+    auto [data, size] = get_neighbors(internal_id, level);
+    if (size > get_m(level)) {
+      std::cerr << internal_id << " had too many neighbors (" << size
+                << ") on level " << level << std::endl;
+      // Try to recover? What happens next?
+      size = get_m(level);
+      setListCount(get_linklist_at_level(internal_id, level), size);
+      //                throw std::runtime_error("too many neighbors found");
+    }
+    auto opt = find_closer_neighbor(query_point, best, data, size);
+    if (!opt.has_value()) {
+      std::cerr << "find_closest_neighbor called on a node (" << internal_id
+                << ") with no neighbors in level " << level << std::endl;
+      return std::make_pair(internal_id, best);
+      //                throw std::runtime_error("find_closest_neighbor called
+      //                on a node with no neighbors");
+    }
+    return opt.value();
+  }
+
+  template <typename Comp>
+  std::vector<std::pair<dist_t, labeltype>> searchKnn(const void *query_data,
+                                                      size_t k, Comp comp) {
+    std::vector<std::pair<dist_t, labeltype>> result;
+    if (cur_element_count == 0)
+      return result;
+
+    auto ret = searchKnn(query_data, k);
+
+    while (!ret.empty()) {
+      result.push_back(ret.top());
+      ret.pop();
+    }
+
+    std::sort(result.begin(), result.end(), comp);
+
+    return result;
+  }
+
+  void checkIntegrity() {
+    int connections_checked = 0;
+    std::vector<int> inbound_connections_num(cur_element_count, 0);
+    for (int i = 0; i < cur_element_count; i++) {
+      for (int l = 0; l <= element_levels_[i]; l++) {
+        linklistsizeint *ll_cur = get_linklist_at_level(i, l);
+        int size = getListCount(ll_cur);
+        tableint *data = (tableint *)(ll_cur + 1);
+        std::unordered_set<tableint> s;
+        for (int j = 0; j < size; j++) {
+          assert(data[j] > 0);
+          assert(data[j] < cur_element_count);
+          assert(data[j] != i);
+          inbound_connections_num[data[j]]++;
+          s.insert(data[j]);
+          connections_checked++;
         }
+        assert(s.size() == size);
+      }
+    }
+    if (cur_element_count > 1) {
+      int min1 = inbound_connections_num[0], max1 = inbound_connections_num[0];
+      for (int i = 0; i < cur_element_count; i++) {
+        assert(inbound_connections_num[i] > 0);
+        min1 = std::min(inbound_connections_num[i], min1);
+        max1 = std::max(inbound_connections_num[i], max1);
+      }
+      std::cout << "Min inbound: " << min1 << ", Max inbound:" << max1 << "\n";
+    }
+    std::cout << "integrity ok, checked " << connections_checked
+              << " connections\n";
+  }
 
-        void init_list(tableint internal_id, size_t level) {
-            if (level == 0)
-                throw std::runtime_error("init_list should only be called for L1 and above");
-            auto size = list_size(level);
-            linkLists_[internal_id] = (char *) malloc(size);
-            if (linkLists_[internal_id] == nullptr)
-                throw std::runtime_error("Not enough memory: failed to allocate linklist");
-            memset(linkLists_[internal_id], 0, size);
-        };
-
-        virtual QueryResult
-        searchKnn(const void *query_data, size_t k) const {
-
-            QueryResult result = {};
-            if (cur_element_count == 0) return result;
-            StopW timer;
-            tableint currObj = get_best_entry_point(query_data);
-            result.times.ln_micros = timer.getElapsedTimeMicro();
-            timer.reset();
-            std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
-            if (has_deletions_) {
-                top_candidates = searchBaseLayerST<true, true>(
-                        currObj, query_data, std::max(ef_, k));
-            } else {
-                top_candidates = searchBaseLayerST<false, true>(
-                        currObj, query_data, std::max(ef_, k));
-            }
-
-            while (top_candidates.size() > k) {
-                top_candidates.pop();
-            }
-            while (top_candidates.size() > 0) {
-                std::pair<dist_t, tableint> rez = top_candidates.top();
-                result.result.push(std::pair<dist_t, labeltype>(rez.first, getExternalLabel(rez.second)));
-                top_candidates.pop();
-            }
-            result.times.l0_micros = timer.getElapsedTimeMicro();
-            return result;
-        }
-
-        std::optional<std::pair<tableint, dist_t>>
-        find_closer_neighbor(const void *query_point, dist_t min_dist, const tableint *neighbors, size_t size) const {
-            tableint n = std::numeric_limits<tableint>::max();
-            for (int i = 0; i < size; i++) {
-                tableint cand = neighbors[i];
-                if (cand < 0 || cand > max_elements_) {
-                    std::cerr << "Invalid neighbor found in neighbors list (" << cand <<
-                              ") all neighbors in list: ";
-                    std::copy(neighbors, neighbors + size,
-                              std::ostream_iterator<size_t>(std::cerr, " "));
-                    std::cerr << std::endl;
-                    throw std::runtime_error("cand error");
-                }
-                dist_t d = fstdistfunc_(query_point, getDataByInternalId(cand), dist_func_param_);
-
-                if (d < min_dist) {
-                    min_dist = d;
-                    n = cand;
-                }
-            }
-            if (n != std::numeric_limits<tableint>::max()) {
-                return std::make_optional(std::make_pair(n, min_dist));
-            } else {
-                return std::nullopt;
-            }
-        }
-
-        std::pair<tableint *, size_t> get_neighbors(tableint internal_id, size_t level) const {
-            if (level > maxlevel_)
-                throw std::runtime_error("requested neighbors from a non-existent level");
-            if (level > element_levels_[internal_id])
-                throw std::runtime_error("requested neighbors from a level this node isn't in");
-            auto data = get_linklist_at_level(internal_id, level);
-            auto size = getListCount(data);
-            return std::make_pair((tableint *) data + 1, size);
-        };
-
-        bool has_neighbor(tableint internal_id, int level, tableint neighbor) const {
-            if (level > maxlevel_)
-                throw std::runtime_error("requested neighbors from a non-existent level");
-            auto[data, size] = get_neighbors(internal_id, level);
-            for (int i = 0; i < size; ++i) {
-                if (data[i] == neighbor) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        std::pair<tableint, dist_t> find_closest_neighbor(tableint internal_id, void *query_point, size_t level) const {
-            if (level > maxlevel_)
-                throw std::runtime_error("requested neighbors from a non-existent level");
-            auto best = std::numeric_limits<dist_t>::max();
-            auto[data, size] = get_neighbors(internal_id, level);
-            if (size > get_m(level)) {
-                std::cerr << internal_id << " had too many neighbors (" << size << ") on level " << level << std::endl;
-                //Try to recover? What happens next?
-                size = get_m(level);
-                setListCount(get_linklist_at_level(internal_id, level), size);
-//                throw std::runtime_error("too many neighbors found");
-            }
-            auto opt = find_closer_neighbor(query_point, best, data, size);
-            if (!opt.has_value()) {
-                std::cerr << "find_closest_neighbor called on a node (" << internal_id
-                          << ") with no neighbors in level " << level << std::endl;
-                return std::make_pair(internal_id, best);
-//                throw std::runtime_error("find_closest_neighbor called on a node with no neighbors");
-            }
-            return opt.value();
-        }
-
-        template<typename Comp>
-        std::vector<std::pair<dist_t, labeltype>>
-        searchKnn(const void *query_data, size_t k, Comp comp) {
-            std::vector<std::pair<dist_t, labeltype>> result;
-            if (cur_element_count == 0) return result;
-
-            auto ret = searchKnn(query_data, k);
-
-            while (!ret.empty()) {
-                result.push_back(ret.top());
-                ret.pop();
-            }
-
-            std::sort(result.begin(), result.end(), comp);
-
-            return result;
-        }
-
-        void checkIntegrity() {
-            int connections_checked = 0;
-            std::vector<int> inbound_connections_num(cur_element_count, 0);
-            for (int i = 0; i < cur_element_count; i++) {
-                for (int l = 0; l <= element_levels_[i]; l++) {
-                    linklistsizeint *ll_cur = get_linklist_at_level(i, l);
-                    int size = getListCount(ll_cur);
-                    tableint *data = (tableint *) (ll_cur + 1);
-                    std::unordered_set<tableint> s;
-                    for (int j = 0; j < size; j++) {
-                        assert(data[j] > 0);
-                        assert(data[j] < cur_element_count);
-                        assert (data[j] != i);
-                        inbound_connections_num[data[j]]++;
-                        s.insert(data[j]);
-                        connections_checked++;
-
-                    }
-                    assert(s.size() == size);
-                }
-            }
-            if (cur_element_count > 1) {
-                int min1 = inbound_connections_num[0], max1 = inbound_connections_num[0];
-                for (int i = 0; i < cur_element_count; i++) {
-                    assert(inbound_connections_num[i] > 0);
-                    min1 = std::min(inbound_connections_num[i], min1);
-                    max1 = std::max(inbound_connections_num[i], max1);
-                }
-                std::cout << "Min inbound: " << min1 << ", Max inbound:" << max1 << "\n";
-            }
-            std::cout << "integrity ok, checked " << connections_checked << " connections\n";
-
-        }
-
-        virtual size_t get_m(size_t level) const {
-            if (level == 0) {
-                return L0M_;
-            } else if (level == 1) {
-                return L1M_;
-            } else {
-                return M_;
-            }
-        }
-    };
-}
+  virtual size_t get_m(size_t level) const {
+    if (level == 0) {
+      return L0M_;
+    } else if (level == 1) {
+      return L1M_;
+    } else {
+      return M_;
+    }
+  }
+};
+} // namespace hnswlib
