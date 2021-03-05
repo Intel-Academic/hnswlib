@@ -1,10 +1,10 @@
 #include <iostream>
 #include <fstream>
 #include <queue>
-
 //#define HNSW_MMAP
 
 #include "hnswlib/hm_ann.h"
+#include "hnswlib/analysis.h"
 
 
 #include <unordered_set>
@@ -157,13 +157,11 @@ struct TestResult {
 
 static TestResult
 test_approx(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_queries, HierarchicalNSW<int> &appr_alg, size_t vecdim,
-            vector<std::priority_queue<std::pair<int, labeltype >>> &answers, size_t k, bool permute) {
+            vector<std::priority_queue<std::pair<int, labeltype >>> &answers, size_t k, bool permute, size_t threads) {
 	TestResult results = {};
 	results.k = k;
     size_t correct = 0;
     size_t total = 0;
-    //uncomment to test in parallel mode:
-    //#pragma omp parallel for
     vector<size_t> permutation(qsize);
     //cout << "permuting" << endl;
     std::iota(permutation.begin(), permutation.end(), 0);
@@ -173,34 +171,34 @@ test_approx(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_queries
 	    std::shuffle(permutation.begin(), permutation.end(), urng);
     }
     //cout << "running queries" << endl;
+    //uncomment to test in parallel mode:
+    #pragma omp parallel for num_threads(threads)
     for (int i = 0; i < n_queries; i++) {
-	size_t offset = permutation[i];
+        size_t offset = permutation[i];
         StopW query_time;
         __itt_task_begin(domain, __itt_null, __itt_null, handle_query);
         QueryResult result = appr_alg.searchKnn(massQ + vecdim * offset, k);
         __itt_task_end(domain);
-	result.times.total_micros = query_time.getElapsedTimeMicro();
-	results.times.push_back(result.times);
+        result.times.total_micros = query_time.getElapsedTimeMicro();
         std::priority_queue<std::pair<int, labeltype >> gt(answers[permutation[i]]);
         unordered_set<labeltype> g;
         total += gt.size();
 
         while (gt.size()) {
-
-
             g.insert(gt.top().second);
             gt.pop();
         }
 
         while (result.result.size()) {
             if (g.find(result.result.top().second) != g.end()) {
-
                 correct++;
             } else {
             }
             result.result.pop();
         }
 
+        #pragma omp critical
+        results.times.push_back(result.times);
     }
     results.recall = 1.0f * correct / total;
     return results;
@@ -257,24 +255,36 @@ Stats calculate_stats(std::vector<float> &floats) {
 static void
 test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_queries, HierarchicalNSW<int> &appr_alg, size_t vecdim,
                vector<std::priority_queue<std::pair<int, labeltype >>> &answers, size_t k, vector<size_t> efs, 
-	       size_t repeats, bool permute) {
-    //for (int i = k; i < 30; i++) {
-        //efs.push_back(i);
-    //}
-    //for (int i = 30; i < 100; i += 10) {
-        //efs.push_back(i);
-    //}
-    //for (int i = 100; i < 500; i += 40) {
-        //efs.push_back(i);
-    //}
-	cout << "| run | #q| ef | " << k << "-recall | qps " 
+               size_t repeats, bool permute, size_t threads, std::filesystem::path output_csv,
+               std::string &notes
+) {
+    auto machine = machine_name();
+    auto work_dir = working_directory();
+    auto date = date_time();
+    auto exe_dir = executable_directory();
+    auto git_rev = git_revision(exe_dir);
+    std::string algorithm("hnsw"); //TODO add name() field to HNSW class
+    std::ofstream csv_file(output_csv, std::ofstream::out | std::ofstream::app);
+    auto vec_dim = 128; //TODO introspect from appr_alg
+    auto vec_bytes = appr_alg.data_size_;
+    auto ef_construction = appr_alg.ef_construction_;
+    auto m0 = appr_alg.L0M_;
+    auto m1 = appr_alg.L1M_;
+    auto m = appr_alg.M_;
+    if (std::filesystem::file_size(output_csv) == 0) {
+        csv_file << "machine,date,algorithm,git_rev,work_dir,run,qsize,n_queries,";
+        csv_file << "vec_dim,vec_bytes,ef_construction,m0, m1, m, ef,permute,threads,k,";
+        csv_file << "recall,qps,query_us,hier_us,L0_us,q_std,h_std,L0_std,q_999,h_999,L0_999,";
+        csv_file << "q_min,h_min,L0_min,q_max,h_max,L0_max,batch_us,batch_hier_us,batch_L0_us,";
+        csv_file << "notes";
+        csv_file << std::endl;
+    }
+	cout << "| run | #q| ef | " << k << "-recall | qps "
 		<< "| query_us | hier_us | L0_us "
 		<< "| q_std | h_std | L0_std "
-		<< "| q_999 | h_999 | L0_999 "
-		<< "| q_min | h_min | L0_min "
-		<< "| q_max | h_max | L0_max "
-		<< "| batch_us | batch_hier_us | batch_L0_us" << endl;
-	cout << "|--|--|--|--|--||||||---|-------|-----|----------|----------|---------|---------|---------|---------|---------|-------|-------|--------|"<< endl;
+        << endl;
+	cout << "|--|--|--|--|--||||||---|" << endl;
+    std::string s(",");
 	for (size_t run = 1; run <= repeats; run++) {
 		//cout << "starting run " << run << endl;
 	    for (size_t ef : efs) {
@@ -282,7 +292,7 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
 		appr_alg.setEf(ef);
 		// StopW stopw = StopW();
 		//cout << "Running queries" << endl;
-		auto test_result = test_approx(massQ, qsize, vecsize, n_queries, appr_alg, vecdim, answers, k, permute);
+		auto test_result = test_approx(massQ, qsize, vecsize, n_queries, appr_alg, vecdim, answers, k, permute, threads);
 		//cout << "Collecting stats" << endl;
 		vector<float> l0_times;
 		std::transform(test_result.times.begin(), test_result.times.end(), std::back_inserter(l0_times),
@@ -298,7 +308,7 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
 		auto total_stats = calculate_stats(total_times);
 
 		auto qps = n_queries / (total_stats.total / (1000.0 * 1000.0));
-		cout << " | " << run << "|" << n_queries << "|" << ef << " | " << test_result.recall << "|" 
+		cout << " | " << run << "|" << n_queries << "|" << ef << " | " << test_result.recall << "|"
 			<< qps << "|"
 			<< total_stats.mean << "|" << ln_stats.mean << "|" << l0_stats.mean << "|"
 			<< total_stats.std << "|" << ln_stats.std << "|" << l0_stats.std << "|"
@@ -307,7 +317,20 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
 			<< total_stats.max << "|" << ln_stats.max << "|" << l0_stats.max << "|"
 			<< total_stats.total << "|" << ln_stats.total << "|" << l0_stats.total << "|"
 			<< endl;
+        csv_file << machine << s << date << s << algorithm << s << git_rev << s << work_dir << s
+            << run << s << qsize << s << n_queries << s;
+        csv_file << vec_dim << s << vec_bytes << s << ef_construction << s  << m0 << s << m1 << s
+                 << m << s << ef << s << permute << s << threads << s << k << s;
+        csv_file << test_result.recall << s << qps << s ;
+        csv_file << total_stats.mean <<s<< ln_stats.mean <<s<< l0_stats.mean << s;
+        csv_file << total_stats.std <<s<< ln_stats.std <<s<< l0_stats.std << s;
+        csv_file << total_stats.three_nines <<s<< ln_stats.three_nines <<s<< l0_stats.three_nines << s;
+        csv_file << total_stats.min <<s<< ln_stats.min <<s<< l0_stats.min << s;
+        csv_file << total_stats.max <<s<< ln_stats.max <<s<< l0_stats.max << s;
+        csv_file << total_stats.total <<s<< ln_stats.total <<s<< l0_stats.total << s;
+        csv_file << notes;
 	    }
+        csv_file << endl;
 	}
 }
 
@@ -329,8 +352,11 @@ void sift_test1B(
 		    std::string &path_gt,
 		    std::string &path_q,
 		    size_t repeats,
-		    bool permute
-		) {
+        bool permute,
+        size_t threads,
+        std::filesystem::path csv_file,
+        std::string &notes
+	) {
 	
 	
 
@@ -485,7 +511,9 @@ void sift_test1B(
     get_gt(massQA, massQ, mass, vecsize, qsize, l2space, vecdim, answers, k);
     cout << "Loaded gt\n";
     for (int i = 0; i < 1; i++)
-        test_vs_recall(massQ, qsize, vecsize, n_queries, *appr_alg, vecdim, answers, k, efs, repeats, permute);
+        test_vs_recall(massQ, qsize, vecsize, n_queries, *appr_alg, vecdim,
+                       answers, k, efs, repeats, permute, threads,
+                       csv_file, notes);
 	cout << "Hops: hier: " << appr_alg->metric_hops_hier <<  " L0: " << appr_alg->metric_distance_computations_hier << endl;
 	cout << " Distances: hier: " << appr_alg->metric_distance_computations_hier << " L0: " << appr_alg->metric_distance_computations_l0 << endl;
     cout << "Actual memory usage: " << getCurrentRSS() / 1000000 << " Mb \n";

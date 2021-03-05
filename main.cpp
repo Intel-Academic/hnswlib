@@ -4,6 +4,7 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
+#include <filesystem>
 
 char *get_opt(char **args, int len, const std::string &option) {
     const auto end = args + len;
@@ -37,7 +38,10 @@ void sift_test1B(
         std::string &ground_file,
         std::string &query_file,
         size_t repeats,
-        bool permute
+        bool permute,
+        size_t threads,
+        std::filesystem::path csv_file,
+        std::string &notes
 );
 
 int main(int argc, char **argv) {
@@ -51,6 +55,8 @@ int main(int argc, char **argv) {
     const auto query_file = get_opt(argv, argc, "--query");
     const auto ground_file = get_opt(argv, argc, "--ground");
     const auto subset_millions = subset == nullptr ? 1 : std::stoi(subset);
+    const auto thread_raw = get_opt(argv, argc, "--threads");
+    const size_t threads = thread_raw == nullptr ? 1 : std::stoi(thread_raw);
     const auto k = get_opt(argv, argc, "-k");
     const auto permute = has_opt(argv, argc, "--permute");
     const auto repeats = get_opt(argv, argc, "--repeat");
@@ -58,6 +64,16 @@ int main(int argc, char **argv) {
     if (nullptr == algorithm) {
         std::cerr << "Must specify algorithm (hnsw or hm-ann)" << std::endl;
         exit(1);
+    }
+    const auto output = get_opt(argv, argc, "--output");
+    std::filesystem::path csv_file("results.csv");
+    if (nullptr != output) {
+        csv_file = output;
+    }
+    std::string notes;
+    const auto notes_raw = get_opt(argv, argc, "--notes");
+    if (nullptr != notes_raw) {
+        notes = notes_raw;
     }
     const auto repeat = repeats == nullptr ? 1 : std::stoi(repeats);
     std::vector<size_t> efs;
@@ -97,6 +113,7 @@ int main(int argc, char **argv) {
               << "\t ground: " << ground << "\n"
               << "\t repeat: " << repeat << "\n"
               << "\t permute: " << permute << "\n"
+              << "\t threads: " << threads << "\n"
               << std::endl;
 
     std::string alg(algorithm);
@@ -112,7 +129,10 @@ int main(int argc, char **argv) {
             ground,
             queries,
             repeat,
-            permute
+            permute,
+            threads,
+            csv_file,
+            notes
     );
 
     return 0;
