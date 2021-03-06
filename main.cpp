@@ -39,7 +39,7 @@ void sift_test1B(
         std::string &query_file,
         size_t repeats,
         bool permute,
-        size_t threads,
+        std::vector<size_t> threads,
         std::filesystem::path csv_file,
         std::string &notes
 );
@@ -56,7 +56,16 @@ int main(int argc, char **argv) {
     const auto ground_file = get_opt(argv, argc, "--ground");
     const auto subset_millions = subset == nullptr ? 1 : std::stoi(subset);
     const auto thread_raw = get_opt(argv, argc, "--threads");
-    const size_t threads = thread_raw == nullptr ? 1 : std::stoi(thread_raw);
+    std::vector<size_t> threads;
+    if (nullptr == thread_raw) {
+        threads.push_back(1);
+    } else {
+        std::istringstream thread_src(thread_raw);
+        std::string s;
+        while (getline(thread_src, s, ',')) {
+            threads.push_back(std::stoi(s));
+        }
+    }
     const auto k = get_opt(argv, argc, "-k");
     const auto permute = has_opt(argv, argc, "--permute");
     const auto repeats = get_opt(argv, argc, "--repeat");
@@ -113,8 +122,9 @@ int main(int argc, char **argv) {
               << "\t ground: " << ground << "\n"
               << "\t repeat: " << repeat << "\n"
               << "\t permute: " << permute << "\n"
-              << "\t threads: " << threads << "\n"
-              << std::endl;
+              << "\t threads: ";
+        std::copy(threads.begin(), threads.end(), std::ostream_iterator<size_t>(std::cout, ", "));
+              std::cout << std::endl;
 
     std::string alg(algorithm);
     sift_test1B(

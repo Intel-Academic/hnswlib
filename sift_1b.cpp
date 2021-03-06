@@ -255,7 +255,7 @@ Stats calculate_stats(std::vector<float> &floats) {
 static void
 test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_queries, HierarchicalNSW<int> &appr_alg, size_t vecdim,
                vector<std::priority_queue<std::pair<int, labeltype >>> &answers, size_t k, vector<size_t> efs, 
-               size_t repeats, bool permute, size_t threads, std::filesystem::path output_csv,
+               size_t repeats, bool permute, vector<size_t> threads, std::filesystem::path output_csv,
                std::string &notes
 ) {
     auto machine = machine_name();
@@ -279,20 +279,21 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
         csv_file << "notes";
         csv_file << std::endl;
     }
-	cout << "| run | #q| ef | " << k << "-recall | qps "
+	cout << "| run | #q| ef | threads |" << k << "-recall | qps "
 		<< "| query_us | hier_us | L0_us "
 		<< "| q_std | h_std | L0_std "
         << endl;
-	cout << "|--|--|--|--|--||||||---|" << endl;
+	cout << "|--|--|--|--|--||||||---||" << endl;
     std::string s(",");
-	for (size_t run = 1; run <= repeats; run++) {
 		//cout << "starting run " << run << endl;
-	    for (size_t ef : efs) {
+	for (size_t ef : efs) {
 		//cout << "starting ef " << ef << endl;
 		appr_alg.setEf(ef);
+        for (size_t thread: threads) {
+            for (size_t run = 1; run <= repeats; run++) {
 		// StopW stopw = StopW();
 		//cout << "Running queries" << endl;
-		auto test_result = test_approx(massQ, qsize, vecsize, n_queries, appr_alg, vecdim, answers, k, permute, threads);
+		auto test_result = test_approx(massQ, qsize, vecsize, n_queries, appr_alg, vecdim, answers, k, permute, thread);
 		//cout << "Collecting stats" << endl;
 		vector<float> l0_times;
 		std::transform(test_result.times.begin(), test_result.times.end(), std::back_inserter(l0_times),
@@ -308,7 +309,7 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
 		auto total_stats = calculate_stats(total_times);
 
 		auto qps = n_queries / (total_stats.total / (1000.0 * 1000.0));
-		cout << " | " << run << "|" << n_queries << "|" << ef << " | " << test_result.recall << "|"
+		cout << " | " << run << "|" << n_queries << "|" << ef << " | " << thread << " | " << test_result.recall << "|"
 			<< qps << "|"
 			<< total_stats.mean << "|" << ln_stats.mean << "|" << l0_stats.mean << "|"
 			<< total_stats.std << "|" << ln_stats.std << "|" << l0_stats.std << "|"
@@ -320,7 +321,7 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
         csv_file << machine << s << date << s << algorithm << s << git_rev << s << work_dir << s
             << run << s << qsize << s << n_queries << s;
         csv_file << vec_dim << s << vec_bytes << s << ef_construction << s  << m0 << s << m1 << s
-                 << m << s << ef << s << permute << s << threads << s << k << s;
+                 << m << s << ef << s << permute << s << thread << s << k << s;
         csv_file << test_result.recall << s << qps << s ;
         csv_file << total_stats.mean <<s<< ln_stats.mean <<s<< l0_stats.mean << s;
         csv_file << total_stats.std <<s<< ln_stats.std <<s<< l0_stats.std << s;
@@ -329,8 +330,9 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
         csv_file << total_stats.max <<s<< ln_stats.max <<s<< l0_stats.max << s;
         csv_file << total_stats.total <<s<< ln_stats.total <<s<< l0_stats.total << s;
         csv_file << notes;
-	    }
         csv_file << endl;
+	    }
+        }
 	}
 }
 
@@ -353,7 +355,7 @@ void sift_test1B(
 		    std::string &path_q,
 		    size_t repeats,
         bool permute,
-        size_t threads,
+        std::vector<size_t> threads,
         std::filesystem::path csv_file,
         std::string &notes
 	) {
@@ -510,10 +512,9 @@ void sift_test1B(
     cout << "Parsing gt:\n";
     get_gt(massQA, massQ, mass, vecsize, qsize, l2space, vecdim, answers, k);
     cout << "Loaded gt\n";
-    for (int i = 0; i < 1; i++)
-        test_vs_recall(massQ, qsize, vecsize, n_queries, *appr_alg, vecdim,
-                       answers, k, efs, repeats, permute, threads,
-                       csv_file, notes);
+    test_vs_recall(massQ, qsize, vecsize, n_queries, *appr_alg, vecdim,
+                    answers, k, efs, repeats, permute, threads,
+                    csv_file, notes);
 	cout << "Hops: hier: " << appr_alg->metric_hops_hier <<  " L0: " << appr_alg->metric_distance_computations_hier << endl;
 	cout << " Distances: hier: " << appr_alg->metric_distance_computations_hier << " L0: " << appr_alg->metric_distance_computations_l0 << endl;
     cout << "Actual memory usage: " << getCurrentRSS() / 1000000 << " Mb \n";
