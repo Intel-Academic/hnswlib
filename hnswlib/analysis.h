@@ -50,13 +50,19 @@ std::string git_revision(std::filesystem::path &repo) {
         std::cerr << cmd.str() << std::endl;
         throw std::runtime_error("Couldn't get git status for repo " + repo.string());
     }
-    std::string st;
+    bool dirty(false);
     {
+        std::string st;
         std::ifstream f(temp_name);
-        std::getline(f, st);
+        while(std::getline(f, st)) {
+            if (st.size() > 2 && st[0] == ' ' && st[1] == 'M') {
+                dirty = true;
+                break;
+            }
+        }
         std::filesystem::remove(temp_name);
     }
-    if (!st.empty()) {
+    if (dirty) {
         rev += "+uncommitted";
     }
     return rev;
