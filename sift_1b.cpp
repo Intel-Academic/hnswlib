@@ -267,13 +267,14 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
     std::ofstream csv_file(output_csv, std::ofstream::out | std::ofstream::app);
     auto vec_dim = 128; //TODO introspect from appr_alg
     auto vec_bytes = appr_alg.data_size_;
+    auto n_vectors = appr_alg.cur_element_count;
     auto ef_construction = appr_alg.ef_construction_;
     auto m0 = appr_alg.L0M_;
     auto m1 = appr_alg.L1M_;
     auto m = appr_alg.M_;
     if (std::filesystem::file_size(output_csv) == 0) {
         csv_file << "machine,date,algorithm,git_rev,work_dir,run,qsize,n_queries,";
-        csv_file << "vec_dim,vec_bytes,ef_construction,m0, m1, m, ef,permute,threads,k,";
+        csv_file << "n_vectors,vec_dim,vec_bytes,ef_construction,m0, m1, m, ef,permute,threads,k,";
         csv_file << "recall,qps,query_us,hier_us,L0_us,q_std,h_std,L0_std,q_999,h_999,L0_999,";
         csv_file << "q_min,h_min,L0_min,q_max,h_max,L0_max,batch_us,batch_hier_us,batch_L0_us,";
         csv_file << "notes";
@@ -320,7 +321,7 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
 			<< endl;
         csv_file << machine << s << date << s << algorithm << s << git_rev << s << work_dir << s
             << run << s << qsize << s << n_queries << s;
-        csv_file << vec_dim << s << vec_bytes << s << ef_construction << s  << m0 << s << m1 << s
+        csv_file << n_vectors << s << vec_dim << s << vec_bytes << s << ef_construction << s  << m0 << s << m1 << s
                  << m << s << ef << s << permute << s << thread << s << k << s;
         csv_file << test_result.recall << s << qps << s ;
         csv_file << total_stats.mean <<s<< ln_stats.mean <<s<< l0_stats.mean << s;
