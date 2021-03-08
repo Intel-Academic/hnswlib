@@ -153,6 +153,7 @@ struct TestResult {
 	size_t k;
 	float recall;
 	vector<Times> times;
+    float batch_micros;
 };
 
 static TestResult
@@ -172,6 +173,7 @@ test_approx(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_queries
     }
     //cout << "running queries" << endl;
     //uncomment to test in parallel mode:
+    auto batch_start = std::chrono::steady_clock::now();
     #pragma omp parallel for num_threads(threads)
     for (int i = 0; i < n_queries; i++) {
         size_t offset = permutation[i];
@@ -200,6 +202,8 @@ test_approx(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_queries
         #pragma omp critical
         results.times.push_back(result.times);
     }
+    auto batch_end = std::chrono::steady_clock::now();
+    results.batch_micros = std::chrono::duration_cast<std::chrono::microseconds>(batch_end - batch_start).count();
     results.recall = 1.0f * correct / total;
     return results;
 }
@@ -317,7 +321,7 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
 			<< total_stats.three_nines << "|" << ln_stats.three_nines << "|" << l0_stats.three_nines << "|"
 			<< total_stats.min << "|" << ln_stats.min << "|" << l0_stats.min << "|"
 			<< total_stats.max << "|" << ln_stats.max << "|" << l0_stats.max << "|"
-			<< total_stats.total << "|" << ln_stats.total << "|" << l0_stats.total << "|"
+            << test_result.batch_micros << "|"
 			<< endl;
         csv_file << machine << s << date << s << algorithm << s << git_rev << s << work_dir << s
             << run << s << qsize << s << n_queries << s;
@@ -329,7 +333,7 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
         csv_file << total_stats.three_nines <<s<< ln_stats.three_nines <<s<< l0_stats.three_nines << s;
         csv_file << total_stats.min <<s<< ln_stats.min <<s<< l0_stats.min << s;
         csv_file << total_stats.max <<s<< ln_stats.max <<s<< l0_stats.max << s;
-        csv_file << total_stats.total <<s<< ln_stats.total <<s<< l0_stats.total << s;
+        csv_file << test_result.batch_micros << s;
         csv_file << notes;
         csv_file << endl;
 	    }
