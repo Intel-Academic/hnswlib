@@ -264,7 +264,7 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
     auto exe_dir = executable_directory();
     auto git_rev = git_revision(exe_dir);
     std::string algorithm("hnsw"); //TODO add name() field to HNSW class
-    std::ofstream csv_file(output_csv, std::ofstream::out | std::ofstream::app);
+    std::ofstream csv_file(output_csv, std::ofstream::app);
     auto vec_dim = 128; //TODO introspect from appr_alg
     auto vec_bytes = appr_alg.data_size_;
     auto n_vectors = appr_alg.cur_element_count;
