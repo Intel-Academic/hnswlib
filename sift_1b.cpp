@@ -280,7 +280,7 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
         csv_file << "machine,date,algorithm,git_rev,work_dir,run,qsize,n_queries,";
         csv_file << "n_vectors,vec_dim,vec_bytes,ef_construction,m0, m1, m, ef,permute,threads,k,";
         csv_file << "recall,qps,query_us,hier_us,L0_us,q_std,h_std,L0_std,q_999,h_999,L0_999,";
-        csv_file << "q_min,h_min,L0_min,q_max,h_max,L0_max,batch_us";
+        csv_file << "q_min,h_min,L0_min,q_max,h_max,L0_max,batch_us,";
         csv_file << "notes";
         csv_file << std::endl;
     }
@@ -334,7 +334,7 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
         csv_file << total_stats.min <<s<< ln_stats.min <<s<< l0_stats.min << s;
         csv_file << total_stats.max <<s<< ln_stats.max <<s<< l0_stats.max << s;
         csv_file << test_result.batch_micros << s;
-        csv_file << notes;
+        csv_file << '"' << notes << '"';
         csv_file << endl;
 	    }
         }
