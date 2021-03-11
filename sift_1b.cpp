@@ -276,6 +276,7 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
     auto m0 = appr_alg.L0M_;
     auto m1 = appr_alg.L1M_;
     auto m = appr_alg.M_;
+    auto page_size = sysconf (_SC_PAGESIZE);
     std::string notes(notes_base);
 
 #ifdef HNSW_MMAP
@@ -283,7 +284,7 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
 #endif
 
     if (std::filesystem::file_size(output_csv) == 0) {
-        csv_file << "machine,date,algorithm,git_rev,work_dir,run,qsize,n_queries,";
+        csv_file << "machine,date,algorithm,git_rev,page_size,work_dir,run,qsize,n_queries,";
         csv_file << "n_vectors,vec_dim,vec_bytes,ef_construction,m0, m1, m, ef,permute,threads,k,";
         csv_file << "recall,qps,query_us,hier_us,L0_us,q_std,h_std,L0_std,q_999,h_999,L0_999,";
         csv_file << "q_min,h_min,L0_min,q_max,h_max,L0_max,batch_us,";
@@ -329,7 +330,7 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
 			<< total_stats.max << "|" << ln_stats.max << "|" << l0_stats.max << "|"
             << test_result.batch_micros << "|"
 			<< endl;
-        csv_file << machine << s << date << s << algorithm << s << git_rev << s << work_dir << s
+        csv_file << machine << s << date << s << algorithm << s << git_rev << s << page_size << s << work_dir << s
             << run << s << qsize << s << n_queries << s;
         csv_file << n_vectors << s << vec_dim << s << vec_bytes << s << ef_construction << s  << m0 << s << m1 << s
                  << m << s << ef << s << permute << s << thread << s << k << s;
