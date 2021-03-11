@@ -260,7 +260,7 @@ static void
 test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_queries, HierarchicalNSW<int> &appr_alg, size_t vecdim,
                vector<std::priority_queue<std::pair<int, labeltype >>> &answers, size_t k, vector<size_t> efs, 
                size_t repeats, bool permute, vector<size_t> threads, std::filesystem::path output_csv,
-               std::string &notes
+               std::string &notes_base
 ) {
     auto machine = machine_name();
     auto work_dir = working_directory();
@@ -276,6 +276,12 @@ test_vs_recall(unsigned char *massQ, size_t qsize, size_t vecsize, size_t n_quer
     auto m0 = appr_alg.L0M_;
     auto m1 = appr_alg.L1M_;
     auto m = appr_alg.M_;
+    std::string notes(notes_base);
+
+#ifdef HNSW_MMAP
+    notes += ",HNSW_MMAP";
+#endif
+
     if (std::filesystem::file_size(output_csv) == 0) {
         csv_file << "machine,date,algorithm,git_rev,work_dir,run,qsize,n_queries,";
         csv_file << "n_vectors,vec_dim,vec_bytes,ef_construction,m0, m1, m, ef,permute,threads,k,";
