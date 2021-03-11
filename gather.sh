@@ -12,11 +12,12 @@ notes=$1
 
 export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/opt/intel/oneapi/vtune/latest/lib64
 
-avail_mem=`awk '/MemFree/ { printf "%.3f \n", $2/1024/1024 }' /proc/meminfo`
+avail_mem=`awk '/MemAvailable/ { printf "%.3f \n", $2/1024/1024 }' /proc/meminfo`
 
+echo "Available memory: ${avail_mem}GB"
 for sub in 1 10 100 200 500 1000
 do
-    if [[ $avail_mem -le 96 ]] && [[ ${sub} -eq 1000  ]];
+    if (( $(echo "${avail_mem} <= 96.0" | bc -l) )) && [[ ${sub} -eq 1000  ]];
     then
         echo "Reducing max threads on 1B dataset due to memory constraint"
         threads="1,2,4,8,16,20,24,28" # More threads will crash due to OOM
