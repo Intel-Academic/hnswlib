@@ -16,7 +16,7 @@ avail_mem=`awk '/MemFree/ { printf "%.3f \n", $2/1024/1024 }' /proc/meminfo`
 
 for sub in 1 10 100 200 500 1000
 do
-    if [ [ $avail_mem -le 96 ] && [ ${sub} -eq 1000  ] ];
+    if [[ $avail_mem -le 96 ]] && [[ ${sub} -eq 1000  ]];
     then
         echo "Reducing max threads on 1B dataset due to memory constraint"
         threads="1,2,4,8,16,20,24,28" # More threads will crash due to OOM
